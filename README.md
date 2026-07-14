@@ -1,8 +1,8 @@
 # music_mvp
 
-> 基于 ESP32-S3 + LVGL v8 的体感音乐交互原型项目
+> ESP32-S3 体感音乐交互原型 - IMU 手势触发 + 软件鼓合成 + I2S 音频输出
 
-一个将 IMU 动作捕捉、触摸屏交互和 Web 实时监控结合在一起的音乐 MVP（最小可行产品）。通过摇晃、敲击开发板来触发不同的乐器音效，配合 Web 仪表盘实现实时姿态可视化和音频调试。
+通过摇晃、敲击开发板触发不同的乐器音效，合成音频通过 ES8311 编解码器经 I2S 输出到扬声器。配套 Web 仪表盘实现 IMU 实时可视化和音频调试。
 
 ---
 
@@ -10,13 +10,13 @@
 
 | 功能 | 说明 |
 |------|------|
-| **LVGL 图形界面** | 172x640 竖屏 UI，基于官方 AXS15231B QSPI 面板驱动 |
-| **IMU 实时监控** | 6 轴加速度计 + 陀螺仪数据，50Hz 采样率 Web 可视化 |
-| **体感乐器** | 4 种演奏模式：鼓槌 / 三角铁 / 沙槌 / 关闭 |
-| **音频调试面板** | 网页端 Drum Pad + 440Hz 测试音，键盘快捷键触发 |
-| **3D 姿态立方体** | 实时渲染设备 3D 朝向，互补滤波姿态解算 |
-| **Web Serial 通信** | 浏览器直接通过 USB 串口与 ESP32 通信，无需安装 App |
-| **Chart.js 波形图** | 加速度/陀螺仪/运动触发三通道实时折线图 |
+| **IMU 实时数据流** | QMI8658 6 轴传感器, 50Hz CSV 输出到串口 |
+| **体感乐器** | 4 种演奏模式：鼓槌 / 三角铁 / 沙槌 / 关闭, 力度感应 |
+| **软件鼓合成** | Kick / Snare / Hat / Tom 四通道, 正弦+噪声合成 |
+| **I2S 音频输出** | ES8311 DAC 编解码器, 16kHz 立体声, TCA9554 PA 控制 |
+| **Web 仪表盘** | Chart.js 实时波形, 3D 姿态立方体, 打击垫, 模式切换 |
+| **Web Serial 通信** | 浏览器 USB 串口直连, 无需安装 App |
+| **ESP-IDF 组件** | 集成 codec_board + esp_codec_dev 官方音频框架 |
 
 ---
 
@@ -25,17 +25,13 @@
 | 组件 | 参数 |
 |------|------|
 | **主控** | ESP32-S3 |
-| **屏幕** | Waveshare Touch-LCD-3.49 V2, 172x640, AXS15231B QSPI 驱动, SPI Mode 3 |
-| **触摸** | I2C `0x3B`（GPIO 17 SDA / GPIO 18 SCL） |
-| **EXIO** | TCA9554 @ I2C `0x20`（GPIO 47 SDA / GPIO 48 SCL） |
-| │ | Bit 1: 背光控制 |
-| │ | Bit 5: LCD 硬件复位 |
-| **QSPI** | CS=GPIO9, PCLK=GPIO10, DATA0-3=GPIO11-14 |
-| **TE** | GPIO 21（撕裂效应同步信号） |
-| **RTC** | I2C `0x51` |
-| **IMU** | I2C `0x6B`（6 轴加速度计+陀螺仪） |
-
-> **V2 版本注意**：LCD 复位和背光由 TCA9554 EXIO 芯片控制，不同于 V1 版本的直接 GPIO 方式。GPIO8 是 EXIO 中断引脚，不可直接用于背光 PWM。
+| **屏幕** | Waveshare Touch-LCD-3.49 V2, 172x640, AXS15231B (当前固件未启用显示) |
+| **音频 DAC** | ES8311 @ I2C 0x18, I2S 输出 (MCLK=7, BCLK=15, WS=46, DOUT=45) |
+| **音频 ADC** | ES7210 @ I2C 0x40, I2S 输入 (DIN=6), 预留麦克风 |
+| **PA 功放** | TCA9554 @ I2C 0x20, bit7 控制 |
+| **IMU** | QMI8658 @ I2C 0x6B, 6 轴 (加速度计 ±8G + 陀螺仪 ±512dps) |
+| **I2C 总线** | SDA=GPIO47, SCL=GPIO48 (共享 ES8311/ES7210/QMI8658/TCA9554) |
+| **QSPI 显示** | CS=GPIO9, PCLK=GPIO10, DATA0-3=GPIO11-14 (预留, 当前未初始化) |
 
 ---
 
@@ -43,27 +39,69 @@
 
 ```
 music_mvp/
-├── 09_LVGL_V8_Test_V2.ino   # 主程序入口（Arduino/PlatformIO）
-├── user_config.h             # 硬件引脚、I2C 地址、屏幕参数配置
-├── lvgl_port.h / .c          # LVGL 移植层：显示驱动、触摸驱动、任务调度
-├── i2c_bsp.h / .c            # I2C 总线驱动：触摸/RTC/IMU/EXIO 设备管理
-├── exio_bsp.h / .c           # TCA9554 EXIO 驱动：LCD 复位、背光控制
-├── lv_conf.h                 # LVGL v8 配置文件
-├── imu_monitor.html          # Web 仪表盘（IMU 监控 + 音频调试 + 体感乐器）
+├── music_mvp.ino              # 主固件 (Arduino/PlatformIO)
+├── user_config.h              # 引脚、I2C 地址、显示参数配置
+├── imu_monitor.html           # Web 仪表盘
+├── README.md
 │
 ├── src/
-│   ├── axs15231b/            # AXS15231B 面板驱动（QSPI/SPI/I80 多模式支持）
-│   │   ├── esp_lcd_axs15231b.h
-│   │   └── esp_lcd_axs15231b.c
-│   ├── touch/                # 触摸屏抽象层
-│   │   ├── esp_lcd_touch.h
-│   │   └── esp_lcd_touch.c
-│   └── lcd_bl_bsp/           # 背光 PWM 驱动（V1 兼容，V2 使用 EXIO）
-│       ├── lcd_bl_pwm_bsp.h
-│       └── lcd_bl_pwm_bsp.c
+│   ├── codec_board/           # ESP-IDF 音频板级支持包
+│   │   ├── codec_board.h/c    # 板级抽象 (I2C/I2S/Codec/LCD 配置)
+│   │   ├── codec_init.h/c     # 编解码器初始化
+│   │   ├── board_cfg.h/txt    # 板级引脚配置描述
+│   │   ├── cfg_parse.c        # 配置解析器
+│   │   ├── drv/tca9554.c/h    # TCA9554 GPIO 扩展驱动
+│   │   ├── lcd_init.c         # LCD 初始化 (预留)
+│   │   └── dummy_codec.c/h    # 哑编解码器 (纯 I2S)
+│   │
+│   └── esp_codec_dev/         # ESP-IDF 音频编解码器设备框架
+│       ├── esp_codec_dev.c    # 设备管理核心
+│       ├── esp_codec_dev_vol.c # 软件音量控制
+│       ├── device/es8311/     # ES8311 DAC 驱动
+│       ├── device/es7210/     # ES7210 ADC 驱动
+│       ├── platform/          # I2C/SPI/I2S/GPIO 平台抽象
+│       └── interface/         # 编解码器接口定义
 │
-└── demos/                    # LVGL 示例程序（当前为空）
+└── build/                     # 编译产物 (.gitignore 已排除)
 ```
+
+---
+
+## 串口通信协议
+
+Web 仪表盘与 ESP32 之间通过 **115200bps** 串口通信。
+
+### 上行 (PC -> ESP32)
+
+| 命令 | 说明 |
+|------|------|
+| `K` / `S` / `H` / `T` | 触发 Kick / Snare / Hat / Tom 鼓声 |
+| `M0` ~ `M3` | 切换乐器模式 (0=鼓槌, 1=三角铁, 2=沙槌, 3=关闭) |
+| `V0` ~ `V100` | 设置音量百分比 |
+
+### 下行 (ESP32 -> PC)
+
+```
+ax,ay,az,gx,gy,gz
+```
+6 个浮点数值的 CSV 格式，50Hz 输出：
+- `ax,ay,az` - 加速度计 X/Y/Z (单位 m/s^2, ±8G 量程)
+- `gx,gy,gz` - 陀螺仪 X/Y/Z (单位 deg/s, ±512dps 量程)
+
+---
+
+## 乐器模式说明
+
+固件通过检测 IMU 加速度幅值的边沿变化来触发音效：
+
+| 模式 | 命令 | 触发阈值 | 冷却 | 音效 |
+|------|------|---------|------|------|
+| 鼓槌 | `M0` | >15 m/s^2 | 250ms | 力度控制随机鼓声 (K/S/H/T) |
+| 三角铁 | `M1` | >12 m/s^2 | 150ms | 2000Hz Ding 衰减音 |
+| 沙槌 | `M2` | >12 m/s^2 | 150ms | 白噪声 Shake 衰减音 |
+| 关闭 | `M3` | - | - | 仅输出 IMU 数据 |
+
+力度感应：峰值加速度映射到音量因子 0.3~1.0，控制合成振幅。
 
 ---
 
@@ -71,146 +109,119 @@ music_mvp/
 
 ### 1. 环境准备
 
-- **Arduino IDE** 或 **PlatformIO**，安装 ESP32-S3 开发板支持
-- 安装以下 Arduino 库：
-  - `lvgl` (v8.x)
-  - ESP32 官方 BSP / LCD 驱动库
+- **Arduino IDE** 或 **PlatformIO**，安装 ESP32-S3 (esp32 >= 3.0) 开发板支持
+- 安装 ESP-IDF 音频组件 (codec_board, esp_codec_dev 已包含在 `src/` 中)
 
-### 2. 编译 & 烧录
+### 2. 编译与烧录
 
 ```bash
 # PlatformIO
 pio run --target upload
 
-# 或 Arduino IDE 中直接打开 .ino 文件编译上传
+# 或 Arduino IDE 中打开 music_mvp.ino 编译上传
 ```
 
-烧录后，屏幕将显示蓝色背景的 LVGL 诊断界面，确认面板驱动正常工作。
+串口监视器 (115200bps) 将显示初始化日志：
+```
+╔═══════════════════════════════════════╗
+║  music_mvp v1.0                      ║
+║  IMU @50Hz + Drum Pad               ║
+╚═══════════════════════════════════════╝
+[INIT] i2c_new_master_bus: ret=0
+[PA] Speaker amp ON
+[AUDIO] Codec OK
+[AUDIO] Playback open (16kHz stereo)
+[IMU] QMI8658 initialized OK
+[MAIN] IMU streaming started
+[MAIN] === READY ===
+```
 
 ### 3. 打开 Web 仪表盘
 
 1. 用 Chrome/Edge 浏览器打开 `imu_monitor.html`
-2. 点击 **Connect** 按钮，在弹出列表中选择 ESP32-S3 串口设备
-3. 连接成功后即可看到实时 IMU 数据流
+2. 点击 **Connect** 按钮，选择 ESP32-S3 串口设备
+3. 连接后可查看实时 IMU 波形、切换乐器模式、触发鼓声
 
 ---
 
-## 使用说明
+## 音频合成算法
 
-### Web 仪表盘标签页
+软件合成全部在 ESP32-S3 上实时计算，无需外部音频文件：
 
-| 标签 | 功能 |
-|------|------|
-| **IMU Monitor** | 加速度/陀螺仪实时波形、3D 姿态立方体、原始数据日志 |
-| **Audio Debug** | 网页打击垫（Kick/Snare/Hat/Tom）、音量滑块、测试音 |
-| **Instrument** | 体感乐器模式选择、运动触发阈值可视化 |
+| 音色 | 合成方法 | 参数 |
+|------|---------|------|
+| **Kick** | 80Hz 正弦 + 1kHz 短脉冲起音, 指数衰减 (exp(-12t)) | 4096 采样 |
+| **Snare** | 180Hz 正弦 + 白噪声混合 (70/30), 指数衰减 (exp(-8t)) | 4096 采样 |
+| **Hat** | 纯白噪声, 快速指数衰减 (exp(-25t)) | 4096 采样 |
+| **Tom** | 200Hz 正弦 + 频率滑降 (0.7x), 指数衰减 (exp(-5t)) | 4096 采样 |
+| **Triangle** | 2000Hz 正弦, 衰减 (exp(-80t)) | 800 采样 (~50ms) |
+| **Maraca** | 白噪声, 衰减 (exp(-60t)) | 640 采样 (~40ms) |
 
-### 体感乐器模式
-
-通过串口发送 `M<n>` 命令或点击仪表盘切换模式：
-
-| 模式 | 命令 | 触发方式 |
-|------|------|----------|
-| 鼓槌 | `M0` | 快速敲击动作触发鼓声 |
-| 三角铁 | `M1` | 轻敲触发三角铁音效 |
-| 沙槌 | `M2` | 连续摇晃触发沙槌音效 |
-| 关闭 | `M3` | 停止体感触发 |
-
-### 键盘快捷键（Audio Debug 标签页）
-
-| 按键 | 乐器 |
-|------|------|
-| `Q` | Kick |
-| `W` | Snare |
-| `E` | Hat |
-| `R` | Tom |
-
----
-
-## 串口通信协议
-
-Web 仪表盘与 ESP32 之间通过 115200bps 串口通信：
-
-### 上行（PC → ESP32）
-
-| 命令 | 说明 |
-|------|------|
-| `M0` ~ `M3` | 切换体感乐器模式 |
-| `K` / `S` / `H` / `T` | 触发 Kick/Snare/Hat/Tom 鼓声 |
-| `A` | 发送 440Hz 测试音 |
-| `V<0-100>` | 设置音量百分比 |
-
-### 下行（ESP32 → PC）
-
-```
-ax,ay,az,gx,gy,gz
-```
-6 个浮点数值的 CSV 格式，对应加速度计 X/Y/Z（单位 g）和陀螺仪 X/Y/Z（单位 °/s）。
-
----
-
-## 配置说明
-
-`user_config.h` 中的关键宏定义：
-
-```c
-// 软件旋转：0 = 原生 172×640 竖屏, 1 = 旋转 90° 为 640×172
-#define Rotated USER_DISP_ROT_NONO
-
-// I2C 地址
-#define EXAMPLE_EXIO_ADDR   0x20   // TCA9554
-#define EXAMPLE_RTC_ADDR    0x51   // RTC
-#define EXAMPLE_IMU_ADDR    0x6B   // IMU
-#define I2C_TOUCH_ADDR      0x3B   // 触摸屏
-
-// 背光测试模式
-#define Backlight_Testing   0
-```
+输出格式: 16kHz, 16bit, 立体声交错 (I2S standard 格式)。
 
 ---
 
 ## 架构设计
 
 ```
-┌─────────────────────────────────────────────┐
-│                  Arduino Sketch              │
-│           09_LVGL_V8_Test_V2.ino             │
-│  setup() → i2c_init → lvgl_init → backlight │
-│  loop()  → delay(1000)  [LVGL on Core 0]    │
-└──────────┬──────────────┬───────────────────┘
-           │              │
-    ┌──────▼──────┐  ┌───▼───────────────────┐
-    │  lvgl_port  │  │     i2c_bsp           │
-    │  LVGL v8    │  │  port0: RTC/IMU/EXIO  │
-    │  Display    │  │  port1: Touch          │
-    │  Touch      │  └───────────────────────┘
-    │  Tick       │
-    └──────┬──────┘
-           │
-    ┌──────▼──────────────────────────────┐
-    │     esp_lcd_axs15231b (QSPI)        │
-    │  172×640 RGB565, full_refresh=1     │
-    └─────────────────────────────────────┘
+                        Serial (115200)
+  PC Browser  <═══════════════════════════>  ESP32-S3
+  imu_monitor     CSV IMU data (50Hz)          │
+  .html          K/S/H/T drum triggers         │
+                  M0-M3 mode switch            │
+                  V0-V100 volume               │
+                                               │
+                    ┌──────────────────────────┤
+                    │    music_mvp.ino         │
+                    │                          │
+         ┌──────────┤  setup()                 │
+         │          │    i2c_preinit           │
+         │          │    pa_init (TCA9554)     │
+         │          │    audio_init (ES8311)   │
+         │          │    qmi8658_begin         │
+         │          │                          │
+         │          │  loop()                  │
+         │          │    Serial command parser │
+         │          │                          │
+         │          │  imu_task (Core 1, 50Hz) │
+         │          │    QMI8658 read          │
+         │          │    Gesture detection     │
+         │          │    Drum synthesis        │
+         └──────────┤                          │
+                    └──────────────────────────┤
+                                               │
+              ┌────────────────────────────────┤
+              │         I2C Bus (SDA47/SCL48)  │
+     ┌────────┼────────┬──────────┬───────────┤
+     │        │        │          │           │
+  TCA9554  ES8311   ES7210    QMI8658        │
+  (PA ctrl) (DAC)   (ADC)     (IMU)          │
+     │        │                                   
+     │    I2S (MCLK/BCLK/WS/DOUT/DIN)             
+     │        │                                   
+   Speaker  Codec                                 
 ```
 
-- **LVGL 任务**运行在 FreeRTOS Core 0，使用双缓冲（SPIRAM）+ DMA
-- **I2C** 双总线架构：port0 承载 RTC/IMU/EXIO，port1 独立承载触摸屏
-- **面板刷新**采用分段 DMA 传输 + 信号量同步，避免撕裂
+- **IMU 任务**运行在 FreeRTOS Core 1，50Hz 定时采样并输出 CSV
+- **loop()** 运行在 Core 0，处理串口命令解析
+- **音频合成**在 IMU 任务中直接写入 I2S 缓冲区，无需额外任务
+- **手势检测**使用边沿检测状态机：空闲 -> 挥动峰值追踪 -> 触发 -> 冷却
 
 ---
 
 ## 许可证
 
-本项目中的 ESP-IDF 官方驱动文件（`src/` 目录下 ESP LCD/Touch 相关代码）遵循 **Apache-2.0** 许可证，版权归 Espressif Systems 所有。
-
-其余自定义代码可根据需要自行确定许可证。
+- `src/codec_board/` - ESPRESSIF MIT License
+- `src/esp_codec_dev/` - Apache-2.0, Copyright Espressif Systems
+- 自定义代码 (`music_mvp.ino`, `imu_monitor.html`, `user_config.h`) - 自定
 
 ---
 
 ## 注意事项
 
-1. **V2 硬件**的 LCD 复位和背光由 TCA9554 EXIO 控制，务必确认 I2C 地址为 `0x20`
-2. 屏幕 `full_refresh` 必须设为 `1`，否则 QSPI 面板会出现撕裂
-3. LVGL tick 周期为 5ms，LVGL 任务栈大小 4000 字
+1. TCA9554 地址为 `0x20`, bit5=LCD复位(释放=1), bit7=PA功放使能
+2. 当前固件**未启用 LVGL 显示**, QSPI 屏幕未初始化, 以节省内存和 CPU
+3. ES8311 编解码器需要 MCLK 主时钟 (GPIO7)
 4. IMU 数据通过 Web Serial API 读取，仅支持 Chrome/Edge 等 Chromium 内核浏览器
-5. `demos/` 目录当前为空，LVGL 官方 demo 组件未编译进固件以节省空间
+5. I2C 总线速度: ES8311/ES7210/TCA9554 = 100kHz, QMI8658 = 400kHz
+6. 音频输出 16kHz 采样率, 如需更高音质可调整 `esp_codec_dev_sample_info_t`
