@@ -6,198 +6,589 @@
 <title>ESP32-S3 IMU Monitor</title>
 <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
 <style>
-  :root { --bg: #0a0a0f; --panel: #12121a; --border: #1e1e30; --text: #c8c8d4; --accent: #00d4aa; --warn: #ff6b6b; }
-  * { margin:0; padding:0; box-sizing:border-box; }
-  body { background:var(--bg); color:var(--text); font-family: 'SF Mono', 'Fira Code', 'Consolas', monospace; height:100vh; display:flex; flex-direction:column; overflow:hidden; }
-  header { background:var(--panel); border-bottom:1px solid var(--border); padding:12px 20px; display:flex; align-items:center; justify-content:space-between; flex-shrink:0; }
-  header h1 { font-size:16px; font-weight:600; letter-spacing:0.5px; }
-  header h1 span { color:var(--accent); }
-  .status-dot { display:inline-block; width:8px; height:8px; border-radius:50%; margin-right:8px; }
-  .status-dot.on { background:var(--accent); box-shadow:0 0 8px var(--accent); animation:pulse 2s infinite; }
-  .status-dot.off { background:var(--warn); }
-  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.3} }
+  /* ── Reset & Variables ── */
+  :root {
+    --bg: #f5f6f8;
+    --surface: #ffffff;
+    --border: #e2e5ea;
+    --text: #2c3e50;
+    --text-secondary: #6b7c93;
+    --accent: #2563eb;
+    --accent-light: #dbeafe;
+    --danger: #dc2626;
+    --success: #059669;
+    --radius: 8px;
+    --shadow: 0 1px 3px rgba(0,0,0,0.06), 0 1px 2px rgba(0,0,0,0.04);
+    --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+    --mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  }
 
-  #connectBtn { background:var(--accent); color:#000; border:none; padding:8px 20px; border-radius:6px; cursor:pointer; font-weight:600; font-size:13px; font-family:inherit; transition:all 0.2s; }
-  #connectBtn:hover { opacity:0.85; }
-  #connectBtn.connected { background:var(--warn); }
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  header {
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    padding: 10px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-shrink: 0;
+    box-shadow: var(--shadow);
+  }
+  header h1 {
+    font-size: 15px;
+    font-weight: 600;
+    color: var(--text);
+    display: flex;
+    align-items: center;
+    gap: 8px;
+  }
+  header h1 .dot-indicator {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: var(--accent);
+    display: inline-block;
+  }
+  .header-controls {
+    display: flex;
+    align-items: center;
+    gap: 14px;
+    flex-wrap: wrap;
+  }
+  .rate {
+    font-size: 12px;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    white-space: nowrap;
+  }
+  .status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    display: inline-block;
+    background: #d1d5db;
+    transition: background 0.3s;
+  }
+  .status-dot.connected { background: var(--success); }
+  .status-dot.disconnected { background: #d1d5db; }
+
+  /* ── Buttons ── */
+  .btn {
+    border: 1px solid var(--border);
+    background: var(--surface);
+    color: var(--text);
+    padding: 6px 16px;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: var(--font);
+    font-weight: 500;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .btn:hover { background: #f9fafb; border-color: #cbd5e1; }
+  .btn-primary {
+    background: var(--accent);
+    color: #fff;
+    border-color: var(--accent);
+  }
+  .btn-primary:hover { background: #1d4ed8; }
+  .btn-danger {
+    background: #fef2f2;
+    color: var(--danger);
+    border-color: #fecaca;
+  }
+  .btn-danger:hover { background: #fee2e2; }
 
   /* ── Volume Slider ── */
-  #volSlider { width:100px; accent-color:var(--accent); cursor:pointer; }
-  #volLabel { font-size:11px; color:var(--accent); min-width:28px; text-align:right; }
+  .vol-group {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: var(--text-secondary);
+  }
+  .vol-group input[type="range"] {
+    width: 80px;
+    accent-color: var(--accent);
+    cursor: pointer;
+  }
+  .vol-label {
+    font-family: var(--mono);
+    font-size: 12px;
+    color: var(--accent);
+    min-width: 32px;
+    text-align: right;
+    font-weight: 500;
+  }
 
-  .main-grid { display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr; gap:1px; background:var(--border); flex:1; overflow:hidden; }
-  .panel { background:var(--bg); position:relative; display:flex; flex-direction:column; overflow:hidden; }
-  .panel-header { background:var(--panel); padding:8px 14px; font-size:12px; font-weight:600; letter-spacing:0.5px; text-transform:uppercase; color:var(--accent); border-bottom:1px solid var(--border); flex-shrink:0; }
-  .panel-header .unit { color:#666; font-weight:normal; margin-left:6px; }
-  .chart-wrap { flex:1; position:relative; padding:8px; min-height:0; }
-  canvas { width:100% !important; height:100% !important; }
+  /* ── Tab Navigation ── */
+  .tab-nav {
+    display: flex;
+    background: var(--surface);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+    overflow-x: auto;
+    -webkit-overflow-scrolling: touch;
+  }
+  .tab-btn {
+    padding: 10px 20px;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-family: var(--font);
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.15s;
+    white-space: nowrap;
+  }
+  .tab-btn:hover { color: var(--text); }
+  .tab-btn.active {
+    color: var(--accent);
+    border-bottom-color: var(--accent);
+  }
 
-  .cube-panel { display:flex; align-items:center; justify-content:center; }
-  .cube-scene { perspective:800px; width:180px; height:180px; }
-  .cube { width:100%; height:100%; position:relative; transform-style:preserve-3d; transition:transform 0.05s linear; }
-  .face { position:absolute; width:180px; height:180px; border:2px solid var(--accent); background:rgba(0,212,170,0.06); display:flex; align-items:center; justify-content:center; font-size:11px; color:var(--accent); backface-visibility:visible; }
-  .face.front  { transform:translateZ(90px); }
-  .face.back   { transform:rotateY(180deg) translateZ(90px); }
-  .face.right  { transform:rotateY(90deg) translateZ(90px); }
-  .face.left   { transform:rotateY(-90deg) translateZ(90px); }
-  .face.top    { transform:rotateX(90deg) translateZ(90px); }
-  .face.bottom { transform:rotateX(-90deg) translateZ(90px); }
+  /* ── Tab Content ── */
+  .tab-content { flex: 1; }
 
-  .data-readout { display:grid; grid-template-columns:1fr 1fr; gap:6px; padding:10px 14px; background:var(--panel); border-top:1px solid var(--border); flex-shrink:0; }
-  .data-item { text-align:center; }
-  .data-item .val { font-size:20px; font-weight:700; color:#fff; font-variant-numeric:tabular-nums; }
-  .data-item .lbl { font-size:10px; color:#666; margin-top:2px; }
-  .data-item .val.g { color:var(--accent); }
-  .data-item .val.r { color:var(--warn); }
+  /* ── Panel Grid ── */
+  .main-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 1px;
+    background: var(--border);
+  }
+  .panel {
+    background: var(--surface);
+    display: flex;
+    flex-direction: column;
+    min-height: 260px;
+  }
+  .panel-header {
+    background: #fafbfc;
+    padding: 8px 14px;
+    font-size: 11px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: var(--text-secondary);
+    border-bottom: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .panel-header .unit {
+    font-weight: 400;
+    color: #9ca3af;
+    margin-left: 4px;
+    text-transform: none;
+  }
+  .chart-wrap {
+    flex: 1;
+    position: relative;
+    padding: 8px;
+    min-height: 180px;
+  }
+  canvas { width: 100% !important; height: 100% !important; }
 
-  .rate { font-size:10px; color:#555; }
+  /* ── Data Readouts ── */
+  .data-readout {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 4px;
+    padding: 8px 14px;
+    background: #fafbfc;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .data-item {
+    text-align: center;
+    padding: 4px 0;
+  }
+  .data-item .val {
+    font-size: 18px;
+    font-weight: 600;
+    font-family: var(--mono);
+    color: var(--text);
+    font-variant-numeric: tabular-nums;
+  }
+  .data-item .val.x { color: #ef4444; }
+  .data-item .val.y { color: #059669; }
+  .data-item .val.z { color: var(--text); }
+  .data-item .lbl {
+    font-size: 10px;
+    color: var(--text-secondary);
+    margin-top: 2px;
+  }
 
+  /* ── Log Panel ── */
+  .log-panel {
+    display: flex;
+    flex-direction: column;
+    min-height: 260px;
+  }
+  .log-panel pre {
+    flex: 1;
+    overflow-y: auto;
+    padding: 8px 14px;
+    font-size: 11px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    font-family: var(--mono);
+    white-space: pre-wrap;
+    word-break: break-all;
+    margin: 0;
+    background: var(--surface);
+    -webkit-overflow-scrolling: touch;
+  }
 
+  /* ── Drum Pad Buttons ── */
+  .drum-grid {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 16px;
+    padding: 20px;
+    flex: 1;
+    flex-wrap: wrap;
+  }
+  .drum-btn {
+    aspect-ratio: 1;
+    border-radius: 12px;
+    border: 1px solid var(--border);
+    cursor: pointer;
+    font-family: var(--font);
+    font-size: 14px;
+    font-weight: 600;
+    color: var(--text);
+    padding: 16px 24px;
+    background: var(--surface);
+    box-shadow: var(--shadow);
+    transition: all 0.08s ease;
+    outline: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 4px;
+  }
+  .drum-btn:active { transform: scale(0.95); box-shadow: none; }
+  .drum-btn.kick { border-left: 4px solid #ef4444; }
+  .drum-btn.snare { border-left: 4px solid #f59e0b; }
+  .drum-btn.hat { border-left: 4px solid #3b82f6; }
+  .drum-btn.tom { border-left: 4px solid #8b5cf6; }
+  .drum-emoji { font-size: 24px; }
+
+  /* ── Keyboard Hint ── */
+  .keyboard-hint {
+    text-align: center;
+    padding: 8px 14px;
+    color: var(--text-secondary);
+    font-size: 12px;
+    background: #fafbfc;
+    border-top: 1px solid var(--border);
+    flex-shrink: 0;
+  }
+  .keyboard-hint kbd {
+    display: inline-block;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 1px 7px;
+    font-size: 11px;
+    font-family: var(--mono);
+    color: var(--text);
+    margin: 0 2px;
+    box-shadow: 0 1px 0 rgba(0,0,0,0.08);
+  }
+
+  /* ── Audio Controls ── */
+  .audio-ctrl {
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    align-items: center;
+    justify-content: center;
+    flex: 1;
+  }
+  .audio-ctrl .vol-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+  }
+
+  /* ── Instrument Mode Buttons ── */
+  .mode-grid {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 10px;
+    padding: 14px;
+    flex: 1;
+    align-content: center;
+  }
+  .mode-btn {
+    aspect-ratio: 2;
+    border: 2px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    cursor: pointer;
+    font-family: var(--font);
+    font-size: 14px;
+    color: var(--text);
+    transition: all 0.15s;
+    outline: none;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+  }
+  .mode-btn:hover { border-color: #cbd5e1; background: #f9fafb; }
+  .mode-btn.active {
+    border-color: var(--accent);
+    background: var(--accent-light);
+    color: var(--accent);
+  }
+  .mode-btn .mode-icon { font-size: 26px; }
+  .mode-btn .mode-name { margin-top: 4px; font-weight: 500; }
+  .mode-btn .mode-sub { font-size: 10px; color: var(--text-secondary); }
+
+  /* ── Responsive: Small Screens ── */
+  @media (max-width: 700px) {
+    header {
+      flex-wrap: wrap;
+      gap: 8px;
+      padding: 10px 14px;
+    }
+    header h1 { font-size: 14px; }
+    .header-controls { gap: 8px; }
+    .btn { padding: 5px 12px; font-size: 12px; }
+    .vol-group input[type="range"] { width: 60px; }
+
+    .tab-btn { padding: 8px 14px; font-size: 12px; }
+
+    .main-grid {
+      grid-template-columns: 1fr;
+    }
+    .panel {
+      min-height: 220px;
+      max-height: 360px;
+    }
+    .log-panel {
+      min-height: 220px;
+      max-height: 300px;
+    }
+    .chart-wrap { min-height: 150px; }
+
+    .mode-grid {
+      grid-template-columns: 1fr 1fr;
+      gap: 8px;
+      padding: 10px;
+    }
+    .mode-btn { font-size: 13px; }
+    .drum-btn { padding: 12px 18px; font-size: 13px; }
+  }
+
+  @media (max-width: 400px) {
+    .header-controls { gap: 6px; }
+    .vol-group input[type="range"] { width: 48px; }
+    .data-readout { grid-template-columns: 1fr; }
+    .main-grid { grid-template-columns: 1fr; }
+  }
 </style>
 </head>
 <body>
 
+<!-- ═══════ Header ═══════ -->
 <header>
-  <h1><span>◈</span> ESP32-S3 IMU Monitor</h1>
-  <div style="display:flex;align-items:center;gap:16px;">
-    <div style="display:flex;align-items:center;gap:6px;">
-      <span style="font-size:11px;color:#666;">🔊</span>
+  <h1>
+    <span class="dot-indicator"></span>
+    ESP32-S3 IMU Monitor
+  </h1>
+  <div class="header-controls">
+    <div class="vol-group">
+      <span>Volume</span>
       <input type="range" id="volSlider" min="0" max="100" value="80" oninput="setVolume(this.value)">
-      <span id="volLabel">80%</span>
+      <span class="vol-label" id="volLabel">80%</span>
     </div>
     <span class="rate" id="rateDisplay">-- Hz</span>
-    <span class="status-dot off" id="statusDot"></span>
-    <button id="connectBtn" onclick="toggleSerial()">Connect</button>
+    <span class="status-dot disconnected" id="statusDot"></span>
+    <button class="btn btn-primary" id="connectBtn" onclick="toggleSerial()">Connect</button>
   </div>
 </header>
 
-<!-- ── Tabs ── -->
-<nav style="display:flex;background:var(--panel);border-bottom:1px solid var(--border);flex-shrink:0;">
-  <button class="tab-btn" onclick="switchTab('imu')" id="tabImu" style="padding:10px 24px;background:none;border:none;color:var(--accent);font-size:13px;font-family:inherit;cursor:pointer;border-bottom:2px solid var(--accent);transition:all 0.2s;letter-spacing:0.5px;">📊 IMU Monitor</button>
-  <button class="tab-btn" onclick="switchTab('audio')" id="tabAudio" style="padding:10px 24px;background:none;border:none;color:#555;font-size:13px;font-family:inherit;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;letter-spacing:0.5px;">🔊 Audio Debug</button>
-  <button class="tab-btn" onclick="switchTab('instrument')" id="tabInstrument" style="padding:10px 24px;background:none;border:none;color:#555;font-size:13px;font-family:inherit;cursor:pointer;border-bottom:2px solid transparent;transition:all 0.2s;letter-spacing:0.5px;">🎵 Instrument</button>
+<!-- ═══════ Tabs ═══════ -->
+<nav class="tab-nav">
+  <button class="tab-btn active" onclick="switchTab('imu')" id="tabImu">IMU Monitor</button>
+  <button class="tab-btn" onclick="switchTab('audio')" id="tabAudio">Audio Debug</button>
+  <button class="tab-btn" onclick="switchTab('instrument')" id="tabInstrument">Instrument</button>
 </nav>
 
-<!-- ── IMU Dashboard ── -->
-<div id="imuTab" class="tab-content" style="display:flex;flex-direction:column;flex:1;overflow:hidden;">
-<div id="imuDash">
+<!-- ═══════ IMU Tab ═══════ -->
+<div id="imuTab" class="tab-content" style="display:flex;flex-direction:column;">
   <div class="main-grid">
-    <!-- 加速度 -->
+    <!-- Accelerometer -->
     <div class="panel">
       <div class="panel-header">Accelerometer <span class="unit">g</span></div>
       <div class="chart-wrap"><canvas id="accChart"></canvas></div>
       <div class="data-readout">
-        <div class="data-item"><div class="val r" id="valAX">--</div><div class="lbl">Acc X (g)</div></div>
-        <div class="data-item"><div class="val g" id="valAY">--</div><div class="lbl">Acc Y (g)</div></div>
-        <div class="data-item" style="grid-column:1/3"><div class="val" id="valAZ" style="color:#fff;">--</div><div class="lbl">Acc Z (g)</div></div>
+        <div class="data-item"><div class="val x" id="valAX">--</div><div class="lbl">X (g)</div></div>
+        <div class="data-item"><div class="val y" id="valAY">--</div><div class="lbl">Y (g)</div></div>
+        <div class="data-item"><div class="val z" id="valAZ">--</div><div class="lbl">Z (g)</div></div>
+        <div class="data-item">&nbsp;</div>
       </div>
     </div>
 
-    <!-- 陀螺仪 -->
+    <!-- Gyroscope -->
     <div class="panel">
       <div class="panel-header">Gyroscope <span class="unit">°/s</span></div>
       <div class="chart-wrap"><canvas id="gyrChart"></canvas></div>
       <div class="data-readout">
-        <div class="data-item"><div class="val r" id="valGX">--</div><div class="lbl">Gyr X (°/s)</div></div>
-        <div class="data-item"><div class="val g" id="valGY">--</div><div class="lbl">Gyr Y (°/s)</div></div>
-        <div class="data-item" style="grid-column:1/3"><div class="val" id="valGZ" style="color:#fff;">--</div><div class="lbl">Gyr Z (°/s)</div></div>
+        <div class="data-item"><div class="val x" id="valGX">--</div><div class="lbl">X (°/s)</div></div>
+        <div class="data-item"><div class="val y" id="valGY">--</div><div class="lbl">Y (°/s)</div></div>
+        <div class="data-item"><div class="val z" id="valGZ">--</div><div class="lbl">Z (°/s)</div></div>
+        <div class="data-item">&nbsp;</div>
       </div>
     </div>
 
-    <!-- 3D 姿态 -->
-    <div class="panel cube-panel">
-      <div class="cube-scene"><div class="cube" id="cube"><div class="face front">Front</div><div class="face back">Back</div><div class="face right">Right</div><div class="face left">Left</div><div class="face top">Top</div><div class="face bottom">Bottom</div></div></div>
+    <!-- Orientation -->
+    <div class="panel" style="display:flex;align-items:center;justify-content:center;">
+      <div style="text-align:center;padding:20px;">
+        <div style="font-size:13px;font-weight:600;color:var(--text-secondary);margin-bottom:12px;">Orientation</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+          <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Roll</div>
+            <div id="cubeRoll" style="font-size:18px;font-weight:600;font-family:var(--mono);">--°</div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Pitch</div>
+            <div id="cubePitch" style="font-size:18px;font-weight:600;font-family:var(--mono);">--°</div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid var(--border);border-radius:8px;padding:10px 14px;">
+            <div style="font-size:10px;color:var(--text-secondary);margin-bottom:2px;">Yaw</div>
+            <div id="cubeYaw" style="font-size:18px;font-weight:600;font-family:var(--mono);">--°</div>
+          </div>
+        </div>
+      </div>
     </div>
 
-    <!-- 终端日志 -->
-    <div class="panel" style="overflow:hidden;">
-      <div class="panel-header">Raw Data Log</div>
-      <pre id="log" style="flex:1;overflow-y:auto;padding:8px 14px;font-size:11px;line-height:1.5;color:#555;white-space:pre-wrap;word-break:break-all;"></pre>
+    <!-- Raw Log -->
+    <div class="log-panel">
+      <div class="panel-header">Data Log</div>
+      <pre id="log"></pre>
     </div>
   </div>
 </div>
-</div>
 
-<!-- ── Audio Debug Tab ── -->
-<div id="audioTab" class="tab-content" style="display:none;flex:1;overflow:hidden;">
+<!-- ═══════ Audio Debug Tab ═══════ -->
+<div id="audioTab" class="tab-content" style="display:none;">
   <div class="main-grid">
-    <div class="panel" style="grid-column:1/3;">
+    <div class="panel" style="grid-column: 1 / -1;">
       <div class="panel-header">Drum Pad <span class="unit">click or press key</span></div>
-      <div style="display:flex;align-items:center;justify-content:center;gap:20px;padding:24px;flex:1;flex-wrap:wrap;">
-        <button class="drum-btn kick" data-key="Q" onmousedown="playDrum('kick')" style="aspect-ratio:1;border-radius:16px;border:2px solid #2a2a40;cursor:pointer;font-family:inherit;font-size:18px;font-weight:700;color:#fff;padding:20px 30px;background:radial-gradient(circle at 30% 30%, #ff6b6b, #8b0000);box-shadow:0 8px 32px rgba(255,107,107,0.25);transition:all 0.08s ease;outline:none;">🥁 Kick</button>
-        <button class="drum-btn snare" data-key="W" onmousedown="playDrum('snare')" style="aspect-ratio:1;border-radius:16px;border:2px solid #2a2a40;cursor:pointer;font-family:inherit;font-size:18px;font-weight:700;color:#fff;padding:20px 30px;background:radial-gradient(circle at 30% 30%, #ffdc62, #a67c00);box-shadow:0 8px 32px rgba(255,220,98,0.25);transition:all 0.08s ease;outline:none;">🔔 Snare</button>
-        <button class="drum-btn hat" data-key="E" onmousedown="playDrum('hat')" style="aspect-ratio:1;border-radius:16px;border:2px solid #2a2a40;cursor:pointer;font-family:inherit;font-size:18px;font-weight:700;color:#fff;padding:20px 30px;background:radial-gradient(circle at 30% 30%, #62d5ff, #00608b);box-shadow:0 8px 32px rgba(98,213,255,0.25);transition:all 0.08s ease;outline:none;">💿 Hat</button>
-        <button class="drum-btn tom" data-key="R" onmousedown="playDrum('tom')" style="aspect-ratio:1;border-radius:16px;border:2px solid #2a2a40;cursor:pointer;font-family:inherit;font-size:18px;font-weight:700;color:#fff;padding:20px 30px;background:radial-gradient(circle at 30% 30%, #a78bfa, #4c1d95);box-shadow:0 8px 32px rgba(167,139,250,0.25);transition:all 0.08s ease;outline:none;">🪘 Tom</button>
+      <div class="drum-grid">
+        <button class="drum-btn kick" onmousedown="playDrum('kick')">
+          <span class="drum-emoji">🥁</span> Kick
+        </button>
+        <button class="drum-btn snare" onmousedown="playDrum('snare')">
+          <span class="drum-emoji">🔔</span> Snare
+        </button>
+        <button class="drum-btn hat" onmousedown="playDrum('hat')">
+          <span class="drum-emoji">💿</span> Hat
+        </button>
+        <button class="drum-btn tom" onmousedown="playDrum('tom')">
+          <span class="drum-emoji">🪘</span> Tom
+        </button>
       </div>
-      <div class="drum-label" style="text-align:center;padding:8px;color:#666;font-size:12px;background:var(--panel);border-top:1px solid var(--border);">快捷键: <kbd style="display:inline-block;background:#1e1e30;border:1px solid #333;border-radius:4px;padding:2px 8px;font-size:11px;color:#aaa;margin:0 2px;">Q</kbd> Kick <kbd style="display:inline-block;background:#1e1e30;border:1px solid #333;border-radius:4px;padding:2px 8px;font-size:11px;color:#aaa;margin:0 2px;">W</kbd> Snare <kbd style="display:inline-block;background:#1e1e30;border:1px solid #333;border-radius:4px;padding:2px 8px;font-size:11px;color:#aaa;margin:0 2px;">E</kbd> Hat <kbd style="display:inline-block;background:#1e1e30;border:1px solid #333;border-radius:4px;padding:2px 8px;font-size:11px;color:#aaa;margin:0 2px;">R</kbd> Tom</div>
+      <div class="keyboard-hint">
+        快捷键: <kbd>Q</kbd> <kbd>W</kbd> <kbd>E</kbd> <kbd>R</kbd>
+      </div>
     </div>
+
     <div class="panel">
       <div class="panel-header">Volume &amp; Test</div>
-      <div style="padding:20px;display:flex;flex-direction:column;gap:16px;align-items:center;justify-content:center;flex:1;">
-        <div style="display:flex;align-items:center;gap:12px;">
-          <span style="color:#666;font-size:13px;">🔈</span>
+      <div class="audio-ctrl">
+        <div class="vol-row">
+          <span style="font-size:18px;">🔈</span>
           <input type="range" id="volSlider2" min="0" max="100" value="80" oninput="setVolume2(this.value)" style="width:150px;accent-color:var(--accent);">
-          <span style="color:#666;font-size:13px;">🔊</span>
-          <span id="volLabel2" style="color:var(--accent);font-size:14px;font-weight:700;min-width:36px;">80%</span>
+          <span style="font-size:18px;">🔊</span>
+          <span id="volLabel2" style="color:var(--accent);font-size:14px;font-weight:600;font-family:var(--mono);min-width:36px;">80%</span>
         </div>
-        <button onclick="sendTestTone()" style="background:var(--accent);color:#000;border:none;padding:10px 28px;border-radius:8px;cursor:pointer;font-weight:600;font-size:14px;font-family:inherit;">▶ 440Hz Test Tone</button>
-        <span style="font-size:10px;color:#555;">发送测试音到 ESP32 喇叭</span>
+        <button onclick="sendTestTone()" class="btn btn-primary" style="padding:10px 24px;font-size:14px;">▶ 440Hz Test Tone</button>
+        <span style="font-size:11px;color:var(--text-secondary);">发送测试音到 ESP32 喇叭</span>
       </div>
     </div>
-    <div class="panel">
+
+    <div class="log-panel">
       <div class="panel-header">Audio Log</div>
-      <pre id="audioLog" style="flex:1;overflow-y:auto;padding:8px 14px;font-size:11px;line-height:1.5;color:#555;white-space:pre-wrap;word-break:break-all;"></pre>
+      <pre id="audioLog"></pre>
     </div>
   </div>
 </div>
 
-<!-- ── Instrument Tab ── -->
-<div id="instrumentTab" class="tab-content" style="display:none;flex:1;overflow:hidden;">
+<!-- ═══════ Instrument Tab ═══════ -->
+<div id="instrumentTab" class="tab-content" style="display:none;">
   <div class="main-grid">
-    <!-- Mode Selection: spans 2 columns, 2x2 grid of mode buttons -->
-    <div class="panel" style="grid-column:1/3;">
+    <div class="panel" style="grid-column: 1 / -1;">
       <div class="panel-header">Instrument Mode <span class="unit">shake IMU to play</span></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;padding:16px;flex:1;align-content:center;">
-        <button class="mode-btn" data-mode="0" onclick="selectMode(0)" style="aspect-ratio:2;border:2px solid #2a2a40;border-radius:12px;background:#1a1a28;cursor:pointer;font-family:inherit;font-size:15px;color:#c8c8d4;transition:all 0.2s;outline:none;"><div style="font-size:28px;">🥁</div><div style="margin-top:4px;">鼓槌模式</div><div style="font-size:10px;color:#555;">Drumstick</div></button>
-        <button class="mode-btn" data-mode="1" onclick="selectMode(1)" style="aspect-ratio:2;border:2px solid #2a2a40;border-radius:12px;background:#1a1a28;cursor:pointer;font-family:inherit;font-size:15px;color:#c8c8d4;transition:all 0.2s;outline:none;"><div style="font-size:28px;">🔔</div><div style="margin-top:4px;">三角铁模式</div><div style="font-size:10px;color:#555;">Triangle</div></button>
-        <button class="mode-btn" data-mode="2" onclick="selectMode(2)" style="aspect-ratio:2;border:2px solid #2a2a40;border-radius:12px;background:#1a1a28;cursor:pointer;font-family:inherit;font-size:15px;color:#c8c8d4;transition:all 0.2s;outline:none;"><div style="font-size:28px;">🪇</div><div style="margin-top:4px;">沙槌模式</div><div style="font-size:10px;color:#555;">Maraca</div></button>
-        <button class="mode-btn" data-mode="3" onclick="selectMode(3)" style="aspect-ratio:2;border:2px solid #2a2a40;border-radius:12px;background:#1a1a28;cursor:pointer;font-family:inherit;font-size:15px;color:#c8c8d4;transition:all 0.2s;outline:none;"><div style="font-size:28px;">⏹️</div><div style="margin-top:4px;">关闭</div><div style="font-size:10px;color:#555;">Off</div></button>
+      <div class="mode-grid">
+        <button class="mode-btn active" data-mode="3" onclick="selectMode(3)">
+          <span class="mode-icon">⏹️</span>
+          <span class="mode-name">关闭</span>
+          <span class="mode-sub">Off</span>
+        </button>
+        <button class="mode-btn" data-mode="0" onclick="selectMode(0)">
+          <span class="mode-icon">🥁</span>
+          <span class="mode-name">鼓槌模式</span>
+          <span class="mode-sub">Drumstick</span>
+        </button>
+        <button class="mode-btn" data-mode="1" onclick="selectMode(1)">
+          <span class="mode-icon">🔔</span>
+          <span class="mode-name">三角铁模式</span>
+          <span class="mode-sub">Triangle</span>
+        </button>
+        <button class="mode-btn" data-mode="2" onclick="selectMode(2)">
+          <span class="mode-icon">🪇</span>
+          <span class="mode-name">沙槌模式</span>
+          <span class="mode-sub">Maraca</span>
+        </button>
       </div>
     </div>
 
-    <!-- Motion trigger chart -->
     <div class="panel">
       <div class="panel-header">Motion Trigger <span class="unit">|accel| − 1G</span></div>
       <div class="chart-wrap"><canvas id="trigChart"></canvas></div>
     </div>
 
-    <!-- Instrument log -->
-    <div class="panel">
+    <div class="log-panel">
       <div class="panel-header">Instrument Log</div>
-      <pre id="instLog" style="flex:1;overflow-y:auto;padding:8px 14px;font-size:11px;line-height:1.5;color:#555;white-space:pre-wrap;word-break:break-all;"></pre>
+      <pre id="instLog"></pre>
     </div>
   </div>
 </div>
 
-
 <script>
 /* ──────────────── Tab Switching ──────────────── */
 function switchTab(name) {
-  document.querySelectorAll('.tab-btn').forEach(b => { b.style.color = '#555'; b.style.borderBottomColor = 'transparent'; });
+  document.querySelectorAll('.tab-btn').forEach(b => b.classList.remove('active'));
   document.querySelectorAll('.tab-content').forEach(c => { c.style.display = 'none'; });
   if (name === 'imu') {
-    document.getElementById('tabImu').style.color = 'var(--accent)';
-    document.getElementById('tabImu').style.borderBottomColor = 'var(--accent)';
+    document.getElementById('tabImu').classList.add('active');
     document.getElementById('imuTab').style.display = 'flex';
     setTimeout(() => { accChart.resize(); gyrChart.resize(); }, 50);
   } else if (name === 'audio') {
-    document.getElementById('tabAudio').style.color = 'var(--accent)';
-    document.getElementById('tabAudio').style.borderBottomColor = 'var(--accent)';
-    document.getElementById('audioTab').style.display = 'flex';
+    document.getElementById('tabAudio').classList.add('active');
+    document.getElementById('audioTab').style.display = 'block';
   } else if (name === 'instrument') {
-    document.getElementById('tabInstrument').style.color = 'var(--accent)';
-    document.getElementById('tabInstrument').style.borderBottomColor = 'var(--accent)';
-    document.getElementById('instrumentTab').style.display = 'flex';
+    document.getElementById('tabInstrument').classList.add('active');
+    document.getElementById('instrumentTab').style.display = 'block';
     setTimeout(() => { if (trigChart) trigChart.resize(); }, 50);
   }
 }
@@ -206,8 +597,7 @@ function switchTab(name) {
 function setVolume(val) {
   document.getElementById('volLabel').textContent = val + '%';
   if (connected && writer) {
-    const enc = new TextEncoder();
-    writer.write(enc.encode('V' + val + '\n')).catch(() => {});
+    writer.write(new TextEncoder().encode('V' + val + '\n')).catch(() => {});
   }
 }
 
@@ -223,46 +613,67 @@ let labels = [];
 let sampleCount = 0, lastRateTime = performance.now(), rateSamples = 0;
 let roll = 0, pitch = 0, yaw = 0;
 
-// ── Charts ──
+// ── Chart defaults ──
 const chartOpts = (max, min) => ({
-  responsive:true, maintainAspectRatio:false,
-  animation:{duration:0},
-  plugins:{legend:{labels:{color:'#666',font:{size:10},usePointStyle:true,pointStyleWidth:6}}},
-  scales:{
-    x:{display:false},
-    y:{min:min||-6,max:max||6,grid:{color:'#1a1a28'},ticks:{color:'#444',font:{size:9}}}
+  responsive: true,
+  maintainAspectRatio: false,
+  animation: { duration: 0 },
+  plugins: {
+    legend: {
+      labels: {
+        color: '#6b7c93',
+        font: { size: 10 },
+        usePointStyle: true,
+        pointStyleWidth: 6
+      }
+    }
   },
-  elements:{point:{radius:0}}
+  scales: {
+    x: { display: false },
+    y: {
+      min: min || -6,
+      max: max || 6,
+      grid: { color: '#e2e5ea' },
+      ticks: { color: '#9ca3af', font: { size: 9 } }
+    }
+  },
+  elements: { point: { radius: 0 } }
 });
 
 const accCtx = document.getElementById('accChart').getContext('2d');
 const accChart = new Chart(accCtx, {
-  type:'line',
-  data:{labels,datasets:[
-    {label:'X',data:accData.x,borderColor:'#ff6b6b',borderWidth:1,tension:0},
-    {label:'Y',data:accData.y,borderColor:'#00d4aa',borderWidth:1,tension:0},
-    {label:'Z',data:accData.z,borderColor:'#ffffff',borderWidth:1.3,tension:0}
-  ]},
-  options:chartOpts(20,-20)
+  type: 'line',
+  data: {
+    labels,
+    datasets: [
+      { label: 'X', data: accData.x, borderColor: '#ef4444', borderWidth: 1.5, tension: 0 },
+      { label: 'Y', data: accData.y, borderColor: '#059669', borderWidth: 1.5, tension: 0 },
+      { label: 'Z', data: accData.z, borderColor: '#2563eb', borderWidth: 2, tension: 0 }
+    ]
+  },
+  options: chartOpts(20, -20)
 });
 
 const gyrCtx = document.getElementById('gyrChart').getContext('2d');
 const gyrChart = new Chart(gyrCtx, {
-  type:'line',
-  data:{labels,datasets:[
-    {label:'X',data:gyrData.x,borderColor:'#ff6b6b',borderWidth:1,tension:0},
-    {label:'Y',data:gyrData.y,borderColor:'#00d4aa',borderWidth:1,tension:0},
-    {label:'Z',data:gyrData.z,borderColor:'#ffffff',borderWidth:1.3,tension:0}
-  ]},
-  options:chartOpts(500,-500)
+  type: 'line',
+  data: {
+    labels,
+    datasets: [
+      { label: 'X', data: gyrData.x, borderColor: '#ef4444', borderWidth: 1.5, tension: 0 },
+      { label: 'Y', data: gyrData.y, borderColor: '#059669', borderWidth: 1.5, tension: 0 },
+      { label: 'Z', data: gyrData.z, borderColor: '#2563eb', borderWidth: 2, tension: 0 }
+    ]
+  },
+  options: chartOpts(500, -500)
 });
 
-// ── Serial ──
+/* ──────────────── Serial ──────────────── */
 async function toggleSerial() {
   if (connected) { disconnect(); return; }
   try {
-    port = await navigator.serial.requestPort({filters:[{usbVendorId:0x303a}]});
-    await port.open({baudRate:BAUD});
+    port = await navigator.serial.requestPort({ filters: [{ usbVendorId: 0x303a }] });
+    await port.open({ baudRate: BAUD });
     connected = true;
     updateUI();
     writer = port.writable.getWriter();
@@ -271,9 +682,9 @@ async function toggleSerial() {
     streamClosed = reader.closed;
     streamClosed.catch(() => {});
     readLoop();
-  } catch(e) {
+  } catch (e) {
     if (e.message !== 'Failed to execute \'requestPort\' on \'Serial\': Must be handling a user gesture to show a permission request.') {
-      log(`Error: ${e.message}`);
+      log('Error: ' + e.message);
     }
   }
 }
@@ -291,7 +702,7 @@ async function readLoop() {
   let buffer = '';
   try {
     while (reader) {
-      const {value, done} = await reader.read();
+      const { value, done } = await reader.read();
       if (done) break;
       buffer += new TextDecoder().decode(value);
       let idx;
@@ -301,8 +712,8 @@ async function readLoop() {
         processLine(line);
       }
     }
-  } catch(e) {
-    if (e.message !== 'The device was disconnected.') log(`Read error: ${e.message}`);
+  } catch (e) {
+    if (e.message !== 'The device was disconnected.') log('Read error: ' + e.message);
   }
   disconnect();
 }
@@ -338,33 +749,32 @@ function processLine(line) {
   document.getElementById('valGY').textContent = gy.toFixed(1);
   document.getElementById('valGZ').textContent = gz.toFixed(1);
 
-  // 3D orientation (integrate gyro, complementary filter with accel)
-  const dt = 0.02; // 50Hz
+  // Orientation (complementary filter)
+  const dt = 0.02;
   const alpha = 0.98;
 
-  // Gyro integration
   roll  += gx * dt;
   pitch += gy * dt;
   yaw   += gz * dt;
 
-  // Accel correction
-  const accRoll  = Math.atan2(ay, az) * 180/Math.PI;
-  const accPitch = Math.atan2(-ax, Math.sqrt(ay*ay + az*az)) * 180/Math.PI;
+  const accRoll  = Math.atan2(ay, az) * 180 / Math.PI;
+  const accPitch = Math.atan2(-ax, Math.sqrt(ay * ay + az * az)) * 180 / Math.PI;
 
-  roll  = alpha * roll  + (1-alpha) * accRoll;
-  pitch = alpha * pitch + (1-alpha) * accPitch;
+  roll  = alpha * roll  + (1 - alpha) * accRoll;
+  pitch = alpha * pitch + (1 - alpha) * accPitch;
 
-  // Update cube
-  const cube = document.getElementById('cube');
-  cube.style.transform = `rotateX(${pitch.toFixed(1)}deg) rotateY(${-yaw.toFixed(1)}deg) rotateZ(${-roll.toFixed(1)}deg)`;
+  document.getElementById('cubeRoll').textContent = roll.toFixed(1) + '°';
+  document.getElementById('cubePitch').textContent = pitch.toFixed(1) + '°';
+  document.getElementById('cubeYaw').textContent = yaw.toFixed(1) + '°';
 
   // Rate
   rateSamples++;
   const now = performance.now();
   if (now - lastRateTime > 1000) {
     const hz = Math.round(rateSamples / ((now - lastRateTime) / 1000));
-    document.getElementById('rateDisplay').textContent = `${hz} Hz`;
-    rateSamples = 0; lastRateTime = now;
+    document.getElementById('rateDisplay').textContent = hz + ' Hz';
+    rateSamples = 0;
+    lastRateTime = now;
   }
 
   // Chart update throttle: every 5th sample (~10fps)
@@ -378,7 +788,7 @@ function processLine(line) {
 
 function log(msg) {
   const el = document.getElementById('log');
-  el.textContent += `[${new Date().toLocaleTimeString()}] ${msg}\n`;
+  el.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
   el.scrollTop = el.scrollHeight;
 }
 
@@ -387,18 +797,17 @@ function updateUI() {
   const dot = document.getElementById('statusDot');
   if (connected) {
     btn.textContent = 'Disconnect';
-    btn.classList.add('connected');
-    dot.classList.remove('off'); dot.classList.add('on');
+    btn.className = 'btn btn-danger';
+    dot.className = 'status-dot connected';
   } else {
     btn.textContent = 'Connect';
-    btn.classList.remove('connected');
-    dot.classList.remove('on'); dot.classList.add('off');
+    btn.className = 'btn btn-primary';
+    dot.className = 'status-dot disconnected';
     document.getElementById('rateDisplay').textContent = '-- Hz';
   }
 }
 
-/* ──────────────── Audio Debug Functions ──────────────── */
-// Sync volume between header slider and Audio tab slider
+/* ──────────────── Audio Debug ──────────────── */
 function setVolume2(val) {
   document.getElementById('volLabel2').textContent = val + '%';
   document.getElementById('volSlider').value = val;
@@ -406,7 +815,6 @@ function setVolume2(val) {
   setVolume(val);
 }
 
-// Override setVolume to sync back
 const _origSetVolume = setVolume;
 setVolume = function(val) {
   _origSetVolume(val);
@@ -416,7 +824,6 @@ setVolume = function(val) {
   if (l2) l2.textContent = val + '%';
 };
 
-// Drum pad commands
 const DRUM_CMD = { kick: 'K', snare: 'S', hat: 'H', tom: 'T' };
 
 async function playDrum(type) {
@@ -434,7 +841,6 @@ async function playDrum(type) {
   }
 }
 
-// Test tone
 async function sendTestTone() {
   if (!connected || !writer) {
     audioLog('Test tone: 未连接 ESP32');
@@ -448,7 +854,6 @@ async function sendTestTone() {
   }
 }
 
-// Audio log helper
 function audioLog(msg) {
   var el = document.getElementById('audioLog');
   if (!el) return;
@@ -456,17 +861,15 @@ function audioLog(msg) {
   el.scrollTop = el.scrollHeight;
 }
 
-// Keyboard shortcuts for Audio Debug tab
-// (Drum Pad tab shortcuts are handled separately)
 document.addEventListener('keydown', e => {
-  if (!document.getElementById('audioTab') || 
+  if (!document.getElementById('audioTab') ||
       document.getElementById('audioTab').style.display === 'none') return;
   if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
   const map = { q: 'kick', w: 'snare', e: 'hat', r: 'tom' };
   const type = map[e.key.toLowerCase()];
   if (type) {
     playDrum(type);
-    const btn = document.querySelector('.drum-btn.' + type);
+    var btn = document.querySelector('.drum-btn.' + type);
     if (btn) { btn.style.transform = 'scale(0.94)'; setTimeout(() => { btn.style.transform = ''; }, 80); }
   }
 });
@@ -477,9 +880,7 @@ let currentMode = 3;
 function selectMode(mode) {
   currentMode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => {
-    const active = parseInt(b.dataset.mode) === mode;
-    b.style.borderColor = active ? 'var(--accent)' : '#2a2a40';
-    b.style.background = active ? 'rgba(0,212,170,0.1)' : '#1a1a28';
+    b.classList.toggle('active', parseInt(b.dataset.mode) === mode);
   });
   if (connected && writer) {
     writer.write(new TextEncoder().encode('M' + mode + '\n')).catch(() => {});
@@ -487,19 +888,33 @@ function selectMode(mode) {
   }
 }
 
-// Trigger chart
 const trigCtx = document.getElementById('trigChart').getContext('2d');
 const trigArr = Array(150).fill(0);
 const trigChart = new Chart(trigCtx, {
   type: 'bar',
-  data: {labels: Array(150), datasets: [{data: trigArr, backgroundColor:'#00d4aa', barPercentage:0.8}]},
-  options: {responsive:true, maintainAspectRatio:false, animation:{duration:0},
-    scales:{x:{display:false}, y:{min:0, max:10, grid:{color:'#1a1a28'}, ticks:{color:'#444'}}},
-    plugins:{legend:{display:false}}}
+  data: {
+    labels: Array(150),
+    datasets: [{ data: trigArr, backgroundColor: '#2563eb', barPercentage: 0.8 }]
+  },
+  options: {
+    responsive: true,
+    maintainAspectRatio: false,
+    animation: { duration: 0 },
+    scales: {
+      x: { display: false },
+      y: {
+        min: 0,
+        max: 10,
+        grid: { color: '#e2e5ea' },
+        ticks: { color: '#9ca3af' }
+      }
+    },
+    plugins: { legend: { display: false } }
+  }
 });
 
 function updateTriggerChart(ax, ay, az) {
-  const mag = Math.sqrt(ax*ax + ay*ay + az*az) - 9.8;
+  const mag = Math.sqrt(ax * ax + ay * ay + az * az) - 9.8;
   trigArr.push(Math.max(0, Math.abs(mag)));
   if (trigArr.length > 150) trigArr.shift();
   trigChart.data.datasets[0].data = trigArr;
@@ -512,7 +927,6 @@ function instLog(msg) {
   el.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
   el.scrollTop = el.scrollHeight;
 }
-
 </script>
 </body>
 </html>

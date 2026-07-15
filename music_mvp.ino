@@ -178,57 +178,81 @@ static void imu_task(void *arg) {
   float ax, ay, az, gx, gy, gz;
   TickType_t last = xTaskGetTickCount();
   
-  // 边沿检测状态: 0=空闲(低于阈值), 1=挥动中(高于阈值,追踪峰值), 2=冷却中
-  int edge_state = 0;
-  float peak_mag = 0;        // 本次挥动的峰值加速度幅值
-  uint32_t cooldown_end = 0; // 冷却结束时间(ms)
+  // 鼓棒检测用
+  uint32_t swing_down_time = 0;   // 检测到向下挥动的时间戳
+  uint32_t cooldown_end = 0;      // 冷却结束时间
+  uint32_t peak_time = 0;         // 峰值出现时间
+  float peak_az = 0;              // 撞击峰值
+  bool waiting_impact = false;    // 等待撞击
+  
+  // 三角铁/沙锤用
+  float peak_mag = 0;
+  bool swinging = false;
   
   for (;;) {
     if (imu_read(&ax, &ay, &az, &gx, &gy, &gz)) {
-      // 始终输出CSV数据
       Serial.printf("%.3f,%.3f,%.3f,%.1f,%.1f,%.1f\n", ax, ay, az, gx, gy, gz);
       
-      // 乐器模式手势检测
-      if (instrument_mode != 3) {
+      uint32_t now = millis();
+      
+      if (instrument_mode == 0) {
+        // ── 鼓棒: 向下挥→az降低, 撞击→az飙升 ──
+        
+        // 检测向下挥动: az低于8.5 (向下加速抵消重力)
+        if (az < 8.5f && now > cooldown_end) {
+          swing_down_time = now;
+          waiting_impact = true;
+        }
+        
+        // 等待撞击 (az飙升) - 必须在向下挥动后500ms内出现
+        if (waiting_impact && (now - swing_down_time) < 500) {
+          if (az > 13.0f && now > cooldown_end) {
+            peak_az = az;
+            peak_time = now;
+            waiting_impact = false;
+          }
+        }
+        
+        // 追踪峰值并等待回落 (或300ms超时强制触发)
+        if (peak_az > 0) {
+          if (az > peak_az) { peak_az = az; peak_time = now; }
+          if (az < 11.0f || (now - peak_time) > 300) {
+            float vol_factor = (peak_az - 13.0f) / 12.0f;
+            if (vol_factor < 0.3f) vol_factor = 0.3f;
+            if (vol_factor > 1.0f) vol_factor = 1.0f;
+            play_drum_with_force(vol_factor);
+            cooldown_end = now + 400;
+            peak_az = 0;
+            waiting_impact = false;  // 防止反弹误触
+          }
+        }
+        
+        // 向下挥动超时重置
+        if (waiting_impact && (now - swing_down_time) > 500) {
+          waiting_impact = false;
+        }
+        
+      } else if (instrument_mode == 1 || instrument_mode == 2) {
+        // ── 三角铁/沙锤: 总幅值边沿检测 ──
         float mag = sqrtf(ax*ax + ay*ay + az*az);
-        uint32_t now = millis();
         
-        // 各模式的触发阈值
-        float trig_threshold = (instrument_mode == 0) ? 15.0f : 12.0f;
-        float release_threshold = 11.0f;  // 低于此值认为挥动结束
-        
-        if (edge_state == 0) {  // 空闲状态: 等待上升沿
-          if (mag > trig_threshold && (now > cooldown_end)) {
-            edge_state = 1;      // 进入挥动中
+        if (!swinging) {
+          if (mag > 12.0f && now > cooldown_end) {
+            swinging = true;
             peak_mag = mag;
           }
-        } else if (edge_state == 1) {  // 挥动中: 追踪峰值
+        } else {
           if (mag > peak_mag) peak_mag = mag;
-          
-          // 检测挥动结束: mag 回落到释放阈值以下
-          if (mag < release_threshold) {
-            // 根据峰值计算音量因子 (0.3 ~ 1.0)
-            float vol_factor = (peak_mag - trig_threshold) / (30.0f - trig_threshold);
+          if (mag < 11.0f) {
+            float vol_factor = (peak_mag - 12.0f) / 18.0f;
             if (vol_factor < 0.3f) vol_factor = 0.3f;
             if (vol_factor > 1.0f) vol_factor = 1.0f;
             
-            // 触发音效
-            if (instrument_mode == 0) {
-              // 鼓棒模式: 力度控制随机鼓声
-              play_drum_with_force(vol_factor);
-            } else if (instrument_mode == 1) {
-              // 三角铁模式: 一次挥动一次叮声
-              play_triangle_ding(vol_factor);
-            } else if (instrument_mode == 2) {
-              // 沙锤模式: 一次挥动一次沙沙声
-              play_maraca_shake(vol_factor);
-            }
+            if (instrument_mode == 1) play_triangle_ding(vol_factor);
+            else play_maraca_shake(vol_factor);
             
-            // 进入冷却: 防止回弹误触
-            int cooldown_ms = (instrument_mode == 0) ? 250 : 150;
-            cooldown_end = now + cooldown_ms;
-            edge_state = 0;
-            peak_mag = 0;
+            cooldown_end = now + 150;
+            swinging = false;
           }
         }
       }
@@ -271,24 +295,26 @@ static void audio_init() {
   }
 }
 
-// ── 鼓声合成 ──────────────────────────────────
+// ── 鼓声合成 (vol_factor: 0.3~1.0 力度) ──────────
 #define DRUM_LEN 4096
 static int16_t drum_buf[DRUM_LEN * 2];  // stereo interleaved
 
-static void drum_kick() {
+static void drum_kick(float vol) {
+  float amp = vol * 16000.0f;
   for (int i = 0; i < DRUM_LEN; i++) {
     float t = (float)i / 16000.0f;
     float env = expf(-12.0f * t);
     float s = env * sinf(2.0f * (float)M_PI * 80.0f * t);
     if (i < 80) s += (1.0f - i / 80.0f) * 0.5f * sinf(2.0f * (float)M_PI * 1000.0f * t);
-    int16_t v = (int16_t)(s * 16000.0f);
+    int16_t v = (int16_t)(s * amp);
     drum_buf[i * 2] = v;
     drum_buf[i * 2 + 1] = v;
   }
   if (playback) esp_codec_dev_write(playback, drum_buf, DRUM_LEN * 4);
 }
 
-static void drum_snare() {
+static void drum_snare(float vol) {
+  float amp = vol * 14000.0f;
   uint32_t seed = 42;
   for (int i = 0; i < DRUM_LEN; i++) {
     float t = (float)i / 16000.0f;
@@ -297,14 +323,15 @@ static void drum_snare() {
     float noise = (float)(int16_t)(seed >> 16) / 32768.0f;
     float tone = sinf(2.0f * (float)M_PI * 180.0f * t);
     float s = env * (noise * 0.7f + tone * 0.3f);
-    int16_t v = (int16_t)(s * 14000.0f);
+    int16_t v = (int16_t)(s * amp);
     drum_buf[i * 2] = v;
     drum_buf[i * 2 + 1] = v;
   }
   if (playback) esp_codec_dev_write(playback, drum_buf, DRUM_LEN * 4);
 }
 
-static void drum_hat() {
+static void drum_hat(float vol) {
+  float amp = vol * 10000.0f;
   uint32_t seed = 99;
   for (int i = 0; i < DRUM_LEN; i++) {
     float t = (float)i / 16000.0f;
@@ -312,46 +339,43 @@ static void drum_hat() {
     seed = seed * 1103515245 + 12345;
     float noise = (float)(int16_t)(seed >> 16) / 32768.0f;
     float s = env * noise * 0.6f;
-    int16_t v = (int16_t)(s * 10000.0f);
+    int16_t v = (int16_t)(s * amp);
     drum_buf[i * 2] = v;
     drum_buf[i * 2 + 1] = v;
   }
   if (playback) esp_codec_dev_write(playback, drum_buf, DRUM_LEN * 4);
 }
 
-static void drum_tom() {
+static void drum_tom(float vol) {
+  float amp = vol * 13000.0f;
   for (int i = 0; i < DRUM_LEN; i++) {
     float t = (float)i / 16000.0f;
     float env = expf(-5.0f * t);
     float f = 200.0f * (1.0f - 0.3f * (1.0f - env));  // frequency glide
     float s = env * sinf(2.0f * (float)M_PI * f * t);
-    int16_t v = (int16_t)(s * 13000.0f);
+    int16_t v = (int16_t)(s * amp);
     drum_buf[i * 2] = v;
     drum_buf[i * 2 + 1] = v;
   }
   if (playback) esp_codec_dev_write(playback, drum_buf, DRUM_LEN * 4);
 }
 
+// 手动按键触发 (全力度)
 static void play_drum(char cmd) {
   if (!playback) return;
   switch (cmd) {
-    case 'K': drum_kick();  break;
-    case 'S': drum_snare(); break;
-    case 'H': drum_hat();   break;
-    case 'T': drum_tom();   break;
+    case 'K': drum_kick(1.0f);  break;
+    case 'S': drum_snare(1.0f); break;
+    case 'H': drum_hat(1.0f);   break;
+    case 'T': drum_tom(1.0f);   break;
   }
 }
 
-// ── 力度鼓声 ──────────────────────────────────
+// ── 力度鼓声 (手势触发, 根据力度随机鼓 + 音量) ──
 static void play_drum_with_force(float vol_factor) {
-  // 力度控制在30%-100%之间
-  int dyn_vol = 30 + (int)(vol_factor * 70.0f);
-  if (playback) {
-    esp_codec_dev_set_out_vol(playback, (float)dyn_vol);
-    char drums[] = {'K', 'S', 'H', 'T'};
-    play_drum(drums[rand() % 4]);
-    esp_codec_dev_set_out_vol(playback, (float)vol_percent);  // 恢复用户音量
-  }
+  if (!playback) return;
+  // 固定用 Snare
+  drum_snare(vol_factor);
 }
 
 // ── 乐器合成 ──────────────────────────────────
