@@ -178,16 +178,12 @@ static void imu_task(void *arg) {
   float ax, ay, az, gx, gy, gz;
   TickType_t last = xTaskGetTickCount();
   
-  // 鼓棒检测用
-  uint32_t swing_down_time = 0;   // 检测到向下挥动的时间戳
-  uint32_t cooldown_end = 0;      // 冷却结束时间
-  uint32_t peak_time = 0;         // 峰值出现时间
-  float peak_az = 0;              // 撞击峰值
-  bool waiting_impact = false;    // 等待撞击
-  
-  // 三角铁/沙锤用
+  // 手势检测共用状态
   float peak_mag = 0;
+  uint32_t cooldown_end = 0;
+  uint32_t peak_time = 0;
   bool swinging = false;
+  bool must_rest = false;         // 触发后必须回到静止才能检测下一次
   
   for (;;) {
     if (imu_read(&ax, &ay, &az, &gx, &gy, &gz)) {
@@ -196,42 +192,33 @@ static void imu_task(void *arg) {
       uint32_t now = millis();
       
       if (instrument_mode == 0) {
-        // ── 鼓棒: 向下挥→az降低, 撞击→az飙升 ──
+        // ── 鼓棒: 总幅值边沿检测 (不依赖板子方向) ──
+        float mag = sqrtf(ax*ax + ay*ay + az*az);
         
-        // 检测向下挥动: az低于8.5 (向下加速抵消重力)
-        if (az < 8.5f && now > cooldown_end) {
-          swing_down_time = now;
-          waiting_impact = true;
+        // 静止检测: 触发后必须 mag 回到 10~11 范围, 且冷却过期
+        if (must_rest && now > cooldown_end && mag > 10.0f && mag < 11.0f) {
+          must_rest = false;
         }
         
-        // 等待撞击 (az飙升) - 必须在向下挥动后500ms内出现
-        if (waiting_impact && (now - swing_down_time) < 500) {
-          if (az > 13.0f && now > cooldown_end) {
-            peak_az = az;
-            peak_time = now;
-            waiting_impact = false;
-          }
+        // 检测挥动开始: mag 超过 15
+        if (!must_rest && mag > 15.0f && now > cooldown_end) {
+          swinging = true;
+          peak_mag = mag;
         }
         
-        // 追踪峰值并等待回落 (或300ms超时强制触发)
-        if (peak_az > 0) {
-          if (az > peak_az) { peak_az = az; peak_time = now; }
-          if (az < 11.0f || (now - peak_time) > 300) {
-            float vol_factor = (peak_az - 13.0f) / 12.0f;
+        // 追踪峰值并等待回落 (或500ms超时强制触发)
+        if (swinging) {
+          if (mag > peak_mag) { peak_mag = mag; peak_time = now; }
+          if (mag < 13.0f || (now - peak_time) > 500) {
+            float vol_factor = (peak_mag - 15.0f) / 42.0f;  // 15→57 映射到 0→1
             if (vol_factor < 0.3f) vol_factor = 0.3f;
             if (vol_factor > 1.0f) vol_factor = 1.0f;
             play_drum_with_force(vol_factor);
             cooldown_end = now + 400;
-            peak_az = 0;
-            waiting_impact = false;  // 防止反弹误触
+            swinging = false;
+            must_rest = true;
           }
         }
-        
-        // 向下挥动超时重置
-        if (waiting_impact && (now - swing_down_time) > 500) {
-          waiting_impact = false;
-        }
-        
       } else if (instrument_mode == 1 || instrument_mode == 2) {
         // ── 三角铁/沙锤: 总幅值边沿检测 ──
         float mag = sqrtf(ax*ax + ay*ay + az*az);

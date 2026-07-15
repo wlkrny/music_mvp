@@ -403,6 +403,33 @@
     .data-readout { grid-template-columns: 1fr; }
     .main-grid { grid-template-columns: 1fr; }
   }
+
+  /* ── Playback Toggle ── */
+  .playback-toggle {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    background: #f1f5f9;
+    border-radius: 20px;
+    padding: 3px;
+  }
+  .playback-toggle input[type="radio"] { display: none; }
+  .playback-toggle label {
+    padding: 6px 16px;
+    border-radius: 17px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    user-select: none;
+  }
+  .playback-toggle input:checked + label {
+    background: var(--surface);
+    color: var(--accent);
+    box-shadow: 0 1px 2px rgba(0,0,0,0.08);
+  }
 </style>
 </head>
 <body>
@@ -420,6 +447,8 @@
       <span class="vol-label" id="volLabel">80%</span>
     </div>
     <span class="rate" id="rateDisplay">-- Hz</span>
+    <button class="btn btn-record" id="recordBtn" onclick="toggleRecord()">⏺ Record</button>
+    <span class="rec-indicator" id="recIndicator"><span class="rec-dot"></span><span id="recTime">0.0s</span> / <span id="recCount">0</span> samples</span>
     <span class="status-dot disconnected" id="statusDot"></span>
     <button class="btn btn-primary" id="connectBtn" onclick="toggleSerial()">Connect</button>
   </div>
@@ -537,7 +566,14 @@
 <div id="instrumentTab" class="tab-content" style="display:none;">
   <div class="main-grid">
     <div class="panel" style="grid-column: 1 / -1;">
-      <div class="panel-header">Instrument Mode <span class="unit">shake IMU to play</span></div>
+      <div class="panel-header">Instrument Mode <span class="unit">
+        <span class="playback-toggle" style="vertical-align:middle;margin-left:12px;">
+          <input type="radio" name="playback" id="pbBoard" value="board" checked onchange="setPlaybackMode('board')">
+          <label for="pbBoard">🔊 开发板</label>
+          <input type="radio" name="playback" id="pbPC" value="pc" onchange="setPlaybackMode('pc')">
+          <label for="pbPC">🖥️ PC</label>
+        </span>
+      </span></div>
       <div class="mode-grid">
         <button class="mode-btn active" data-mode="3" onclick="selectMode(3)">
           <span class="mode-icon">⏹️</span>
@@ -599,6 +635,7 @@ function setVolume(val) {
   if (connected && writer) {
     writer.write(new TextEncoder().encode('V' + val + '\n')).catch(() => {});
   }
+  if (masterGain) masterGain.gain.value = val / 100;
 }
 
 /* ──────────────── Serial / Charts ──────────────── */
@@ -726,7 +763,13 @@ function processLine(line) {
   const ax = parseFloat(m[1]), ay = parseFloat(m[2]), az = parseFloat(m[3]);
   const gx = parseFloat(m[4]), gy = parseFloat(m[5]), gz = parseFloat(m[6]);
 
-  // Instrument trigger
+  // Record sample
+  if (recBuffer) recordSample(ax, ay, az, gx, gy, gz);
+
+  // Instrument trigger (PC mode)
+  if (playbackMode === 'pc') pcDetectGesture(ax, ay, az);
+
+  // Instrument trigger chart
   updateTriggerChart(ax, ay, az);
 
   // Update charts
@@ -808,6 +851,126 @@ function updateUI() {
 }
 
 /* ──────────────── Audio Debug ──────────────── */
+let playbackMode = 'board';  // 'board' | 'pc'
+let audioCtx = null;
+let masterGain = null;
+
+function initAudio() {
+  if (audioCtx) return;
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  masterGain = audioCtx.createGain();
+  masterGain.gain.value = (volPercent || 80) / 100;
+  masterGain.connect(audioCtx.destination);
+}
+
+function setPlaybackMode(mode) {
+  playbackMode = mode;
+  if (mode === 'pc') initAudio();
+  instLog('播放: ' + (mode === 'pc' ? '🖥️ PC 喇叭' : '🔊 开发板'));
+}
+
+// ── Web Audio 鼓合成 ──
+function pcPlayKick(vol) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const dur = 0.25;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol * 0.9, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.connect(masterGain);
+  const o = audioCtx.createOscillator();
+  o.type = 'sine';
+  o.frequency.setValueAtTime(80, t);
+  o.frequency.exponentialRampToValueAtTime(40, t + 0.1);
+  o.connect(g);
+  o.start(t); o.stop(t + dur);
+}
+
+function pcPlaySnare(vol) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const dur = 0.2;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol * 0.8, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.connect(masterGain);
+  // noise burst
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1) * 0.7;
+  const noise = audioCtx.createBufferSource();
+  noise.buffer = buf;
+  const bp = audioCtx.createBiquadFilter();
+  bp.type = 'bandpass';
+  bp.frequency.value = 3000;
+  bp.Q.value = 0.8;
+  noise.connect(bp).connect(g);
+  noise.start(t); noise.stop(t + dur);
+}
+
+function pcPlayHat(vol) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime;
+  const dur = 0.08;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol * 0.5, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.connect(masterGain);
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+  const noise = audioCtx.createBufferSource(); noise.buffer = buf;
+  const hp = audioCtx.createBiquadFilter(); hp.type = 'highpass'; hp.frequency.value = 8000;
+  noise.connect(hp).connect(g);
+  noise.start(t); noise.stop(t + dur);
+}
+
+function pcPlayTom(vol) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime, dur = 0.3;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol * 0.7, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.connect(masterGain);
+  const o = audioCtx.createOscillator(); o.type = 'sine';
+  o.frequency.setValueAtTime(200, t);
+  o.frequency.exponentialRampToValueAtTime(100, t + 0.1);
+  o.connect(g);
+  o.start(t); o.stop(t + dur);
+}
+
+function pcPlayTriangle(vol) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime, dur = 0.04;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol * 0.5, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.connect(masterGain);
+  const o = audioCtx.createOscillator(); o.type = 'sine';
+  o.frequency.value = 2000;
+  o.connect(g);
+  o.start(t); o.stop(t + dur);
+}
+
+function pcPlayMaraca(vol) {
+  if (!audioCtx) return;
+  const t = audioCtx.currentTime, dur = 0.04;
+  const g = audioCtx.createGain();
+  g.gain.setValueAtTime(vol * 0.4, t);
+  g.gain.exponentialRampToValueAtTime(0.001, t + dur);
+  g.connect(masterGain);
+  const buf = audioCtx.createBuffer(1, audioCtx.sampleRate * dur, audioCtx.sampleRate);
+  const data = buf.getChannelData(0);
+  for (let i = 0; i < data.length; i++) data[i] = (Math.random() * 2 - 1);
+  const noise = audioCtx.createBufferSource(); noise.buffer = buf;
+  noise.connect(g);
+  noise.start(t); noise.stop(t + dur);
+}
+
+function pcPlayDrum(vol) {
+  pcPlaySnare(vol);  // 鼓棒模式固定 Snare
+}
+
 function setVolume2(val) {
   document.getElementById('volLabel2').textContent = val + '%';
   document.getElementById('volSlider').value = val;
@@ -827,6 +990,13 @@ setVolume = function(val) {
 const DRUM_CMD = { kick: 'K', snare: 'S', hat: 'H', tom: 'T' };
 
 async function playDrum(type) {
+  if (playbackMode === 'pc') {
+    initAudio();
+    const map = { kick: pcPlayKick, snare: pcPlaySnare, hat: pcPlayHat, tom: pcPlayTom };
+    if (map[type]) map[type](1.0);
+    audioLog('Drum (PC): ' + type);
+    return;
+  }
   if (!connected || !writer) {
     audioLog('Drum: 未连接 ESP32');
     return;
@@ -874,6 +1044,47 @@ document.addEventListener('keydown', e => {
   }
 });
 
+// ── PC 端手势检测状态 ──
+let pcCooldownEnd = 0, pcPeakMag = 0, pcPeakTime = 0;
+let pcSwinging = false, pcMustRest = false;
+
+function pcDetectGesture(ax, ay, az) {
+  if (currentMode === 3) return;
+  const now = performance.now();
+  initAudio();
+  const mag = Math.sqrt(ax*ax + ay*ay + az*az);
+
+  if (currentMode === 0) {
+    // 鼓棒: 总幅值边沿检测 (不依赖板子方向)
+    if (pcMustRest && now > pcCooldownEnd && mag > 10 && mag < 11) pcMustRest = false;
+    if (!pcMustRest && mag > 15 && now > pcCooldownEnd) {
+      pcSwinging = true; pcPeakMag = mag; pcPeakTime = now;
+    }
+    if (pcSwinging) {
+      if (mag > pcPeakMag) { pcPeakMag = mag; pcPeakTime = now; }
+      if (mag < 13 || (now - pcPeakTime) > 500) {
+        let vf = (pcPeakMag - 15) / 42; if (vf < 0.3) vf = 0.3; if (vf > 1) vf = 1;
+        pcPlaySnare(vf);
+        pcCooldownEnd = now + 400;
+        pcSwinging = false; pcMustRest = true;
+      }
+    }
+  } else {
+    // 三角铁/沙锤: 总幅值
+    if (!pcSwinging) {
+      if (mag > 12 && now > pcCooldownEnd) { pcSwinging = true; pcPeakMag = mag; }
+    } else {
+      if (mag > pcPeakMag) pcPeakMag = mag;
+      if (mag < 11) {
+        let vf = (pcPeakMag - 12) / 18; if (vf < 0.3) vf = 0.3; if (vf > 1) vf = 1;
+        if (currentMode === 1) pcPlayTriangle(vf); else pcPlayMaraca(vf);
+        pcCooldownEnd = now + 150;
+        pcSwinging = false;
+      }
+    }
+  }
+}
+
 /* ──────────────── Instrument Mode ──────────────── */
 let currentMode = 3;
 
@@ -882,9 +1093,15 @@ function selectMode(mode) {
   document.querySelectorAll('.mode-btn').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.mode) === mode);
   });
-  if (connected && writer) {
+  const names = ['🥁 Drumstick', '🔔 Triangle', '🪇 Maraca', '⏹️ Off'];
+  if (mode === 3) { pcSwinging = false; pcMustRest = false; }
+  if (playbackMode === 'pc') {
+    instLog('Mode (PC): ' + names[mode]);
+  } else if (connected && writer) {
     writer.write(new TextEncoder().encode('M' + mode + '\n')).catch(() => {});
-    instLog('Mode: ' + ['🥁 Drumstick', '🔔 Triangle', '🪇 Maraca', '⏹️ Off'][mode]);
+    instLog('Mode: ' + names[mode]);
+  } else {
+    instLog('Mode (no board): ' + names[mode]);
   }
 }
 
@@ -926,6 +1143,63 @@ function instLog(msg) {
   if (!el) return;
   el.textContent += '[' + new Date().toLocaleTimeString() + '] ' + msg + '\n';
   el.scrollTop = el.scrollHeight;
+}
+
+/* ──────────────── Swing Recording ──────────────── */
+let recBuffer = null;
+let recStartTime = 0;
+let recTimerId = null;
+
+function toggleRecord() {
+  const btn = document.getElementById('recordBtn');
+  const ind = document.getElementById('recIndicator');
+  if (recBuffer) {
+    // STOP recording
+    btn.textContent = '⏺ Record';
+    btn.classList.remove('recording');
+    ind.classList.remove('active');
+    if (recTimerId) { clearInterval(recTimerId); recTimerId = null; }
+    downloadRecording();
+    recBuffer = null;
+  } else {
+    // START recording
+    recBuffer = [];
+    recStartTime = performance.now();
+    btn.textContent = '⏹ Stop';
+    btn.classList.add('recording');
+    ind.classList.add('active');
+    document.getElementById('recCount').textContent = '0';
+    document.getElementById('recTime').textContent = '0.0s';
+    recTimerId = setInterval(() => {
+      const dt = (performance.now() - recStartTime) / 1000;
+      document.getElementById('recTime').textContent = dt.toFixed(1) + 's';
+    }, 100);
+  }
+}
+
+function recordSample(ax, ay, az, gx, gy, gz) {
+  if (!recBuffer) return;
+  const t = ((performance.now() - recStartTime) / 1000).toFixed(3);
+  recBuffer.push({ t, ax: ax.toFixed(3), ay: ay.toFixed(3), az: az.toFixed(3),
+                    gx: gx.toFixed(1), gy: gy.toFixed(1), gz: gz.toFixed(1) });
+  document.getElementById('recCount').textContent = recBuffer.length;
+}
+
+function downloadRecording() {
+  if (!recBuffer || recBuffer.length === 0) return;
+  let csv = 'time(s),ax(m/s2),ay(m/s2),az(m/s2),gx(deg/s),gy(deg/s),gz(deg/s)\n';
+  for (const s of recBuffer) {
+    csv += s.t + ',' + s.ax + ',' + s.ay + ',' + s.az + ',' + s.gx + ',' + s.gy + ',' + s.gz + '\n';
+  }
+  const blob = new Blob([csv], { type: 'text/csv' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  const ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
+  a.download = 'swing_' + ts + '.csv';
+  a.click();
+  URL.revokeObjectURL(url);
+  console.log('Recording saved: ' + recBuffer.length + ' samples');
 }
 </script>
 </body>
