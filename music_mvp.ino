@@ -25,6 +25,8 @@
 #include <driver/i2c_master.h>
 #include <math.h>
 
+extern esp_codec_dev_handle_t get_record_handle(void);
+
 // ── I2C 预初始化 ──────────────────────────────
 static i2c_master_bus_handle_t g_i2c_bus = NULL;
 static void i2c_preinit() {
@@ -171,7 +173,7 @@ static bool imu_read(float *ax, float *ay, float *az, float *gx, float *gy, floa
 
 // ── 全局状态 ──────────────────────────────────
 static int vol_percent = 80;
-static int instrument_mode = 3;  // 0=鼓棒 1=三角铁 2=沙锤 3=关闭
+static int instrument_mode = 4;  // 0=鼓棒 1=三角铁 2=沙锤 3=关闭 4=自动(竖挥鼓棒/横挥沙锤)
 
 // ── IMU 数据流任务 ────────────────────────────
 static void imu_task(void *arg) {
@@ -183,63 +185,113 @@ static void imu_task(void *arg) {
   uint32_t cooldown_end = 0;
   uint32_t peak_time = 0;
   bool swinging = false;
-  bool must_rest = false;         // 触发后必须回到静止才能检测下一次
+  bool must_rest = false;
+  
+  // 重力方向估算 (自动模式用)
+  float gx_est = 0, gy_est = 0, gz_est = 9.8f;
+  bool g_calibrated = false;
+  
+  // 挥动方向追踪 (自动模式用)
+  float vert_sum = 0, horiz_sum = 0;
+  int swing_samples = 0;
   
   for (;;) {
     if (imu_read(&ax, &ay, &az, &gx, &gy, &gz)) {
       Serial.printf("%.3f,%.3f,%.3f,%.1f,%.1f,%.1f\n", ax, ay, az, gx, gy, gz);
       
       uint32_t now = millis();
+      float mag = sqrtf(ax*ax + ay*ay + az*az);
+      
+      // ── 重力方向估算: 静止时用 EMA 学习重力向量 ──
+      if (fabsf(mag - 9.8f) < 1.5f) {
+        float alpha = 0.008f;
+        gx_est = gx_est * (1.0f - alpha) + ax * alpha;
+        gy_est = gy_est * (1.0f - alpha) + ay * alpha;
+        gz_est = gz_est * (1.0f - alpha) + az * alpha;
+        if (!g_calibrated && fabsf(gz_est) > 1.0f) g_calibrated = true;
+      }
       
       if (instrument_mode == 0) {
-        // ── 鼓棒: 总幅值边沿检测 (不依赖板子方向) ──
-        float mag = sqrtf(ax*ax + ay*ay + az*az);
-        
-        // 静止检测: 触发后必须 mag 回到 10~11 范围, 且冷却过期
+        // ── 鼓棒: 总幅值边沿检测 (固定 Snare) ──
+        // 静止检测
         if (must_rest && now > cooldown_end && mag > 10.0f && mag < 11.0f) {
           must_rest = false;
         }
-        
-        // 检测挥动开始: mag 超过 15
         if (!must_rest && mag > 15.0f && now > cooldown_end) {
-          swinging = true;
-          peak_mag = mag;
+          swinging = true; peak_mag = mag;
         }
-        
-        // 追踪峰值并等待回落 (或500ms超时强制触发)
         if (swinging) {
           if (mag > peak_mag) { peak_mag = mag; peak_time = now; }
           if (mag < 13.0f || (now - peak_time) > 500) {
-            float vol_factor = (peak_mag - 15.0f) / 42.0f;  // 15→57 映射到 0→1
-            if (vol_factor < 0.3f) vol_factor = 0.3f;
-            if (vol_factor > 1.0f) vol_factor = 1.0f;
-            play_drum_with_force(vol_factor);
-            cooldown_end = now + 400;
-            swinging = false;
-            must_rest = true;
+            float vf = (peak_mag - 15.0f) / 42.0f;
+            if (vf < 0.3f) vf = 0.3f; if (vf > 1.0f) vf = 1.0f;
+            play_drum_with_force(vf);
+            cooldown_end = now + 400; swinging = false; must_rest = true;
           }
         }
       } else if (instrument_mode == 1 || instrument_mode == 2) {
-        // ── 三角铁/沙锤: 总幅值边沿检测 ──
-        float mag = sqrtf(ax*ax + ay*ay + az*az);
-        
+        // ── 三角铁/沙锤 ──
         if (!swinging) {
           if (mag > 12.0f && now > cooldown_end) {
-            swinging = true;
-            peak_mag = mag;
+            swinging = true; peak_mag = mag;
           }
         } else {
           if (mag > peak_mag) peak_mag = mag;
           if (mag < 11.0f) {
-            float vol_factor = (peak_mag - 12.0f) / 18.0f;
-            if (vol_factor < 0.3f) vol_factor = 0.3f;
-            if (vol_factor > 1.0f) vol_factor = 1.0f;
+            float vf = (peak_mag - 12.0f) / 18.0f;
+            if (vf < 0.3f) vf = 0.3f; if (vf > 1.0f) vf = 1.0f;
+            if (instrument_mode == 1) play_triangle_ding(vf);
+            else play_maraca_shake(vf);
+            cooldown_end = now + 150; swinging = false;
+          }
+        }
+      } else if (instrument_mode == 4 && g_calibrated) {
+        // ── 自动模式: 根据挥动方向自动选择乐器 ──
+        // 竖着挥 → 鼓棒(Snare), 横着挥 → 沙锤
+        if (must_rest && now > cooldown_end && mag > 10.0f && mag < 11.0f) {
+          must_rest = false;
+        }
+        
+        if (!swinging) {
+          if (!must_rest && mag > 15.0f && now > cooldown_end) {
+            swinging = true; peak_mag = mag;
+            vert_sum = 0; horiz_sum = 0; swing_samples = 0;
+          }
+        }
+        
+        if (swinging) {
+          if (mag > peak_mag) { peak_mag = mag; peak_time = now; }
+          
+          // 累积运动方向: 投影到重力方向 vs 垂直重力方向
+          float mx = ax - gx_est, my = ay - gy_est, mz = az - gz_est;
+          float gmag = sqrtf(gx_est*gx_est + gy_est*gy_est + gz_est*gz_est);
+          if (gmag > 0.1f) {
+            float gux = gx_est / gmag, guy = gy_est / gmag, guz = gz_est / gmag;
+            float vert_proj = mx*gux + my*guy + mz*guz;  // 带符号投影
+            float vert = fabsf(vert_proj);
+            float hx = mx - vert_proj * gux, hy = my - vert_proj * guy, hz = mz - vert_proj * guz;
+            float horiz = sqrtf(hx*hx + hy*hy + hz*hz);
+            vert_sum += vert; horiz_sum += horiz; swing_samples++;
+          }
+          
+          // 释放触发
+          if (mag < 13.0f || (now - peak_time) > 500) {
+            float vf = (peak_mag - 15.0f) / 42.0f;
+            if (vf < 0.3f) vf = 0.3f; if (vf > 1.0f) vf = 1.0f;
             
-            if (instrument_mode == 1) play_triangle_ding(vol_factor);
-            else play_maraca_shake(vol_factor);
-            
-            cooldown_end = now + 150;
-            swinging = false;
+            if (swing_samples > 2) {
+              float avg_h = horiz_sum / swing_samples;
+              float avg_v = vert_sum / swing_samples;
+              // 竖直分量明显大于水平 → 鼓棒; 否则 → 沙锤
+              if (avg_v > avg_h * 1.2f) {
+                play_drum_with_force(vf);
+              } else {
+                play_maraca_shake(vf);
+              }
+            } else {
+              play_drum_with_force(vf);  // 默认鼓棒
+            }
+            cooldown_end = now + 400; swinging = false; must_rest = true;
           }
         }
       }
@@ -250,6 +302,7 @@ static void imu_task(void *arg) {
 
 // ── ES8311 音频初始化 ─────────────────────────
 static esp_codec_dev_handle_t playback = NULL;
+static esp_codec_dev_handle_t capture = NULL;
 
 static void audio_init() {
   set_codec_board_type("S3_LCD_3_49");
@@ -266,30 +319,41 @@ static void audio_init() {
     return;
   }
 
-  playback = get_playback_handle();
-  Serial.println("[AUDIO] Codec OK");
+  delay(100);  // 等 ES7210 内部时钟稳定
 
-  esp_codec_dev_set_out_vol(playback, 90.0);
+  playback = get_playback_handle();
+  capture = get_record_handle();
+  Serial.printf("[AUDIO] Playback handle: %s, Capture handle: %s\n",
+    playback ? "OK" : "NULL", capture ? "OK" : "NULL");
+
+  esp_codec_dev_set_out_vol(playback, 100.0);
+  if (capture) esp_codec_dev_set_in_gain(capture, 35.0);
+  
   esp_codec_dev_sample_info_t fs = {};
-  fs.sample_rate = 16000;
+  fs.sample_rate = 24000;
   fs.channel = 2;
   fs.bits_per_sample = 16;
-  ret = esp_codec_dev_open(playback, &fs);
-  if (ret != ESP_OK) {
-    Serial.printf("[AUDIO] Open FAILED: 0x%x\n", ret);
-  } else {
-    Serial.println("[AUDIO] Playback open (16kHz stereo)");
+  Serial.println("[AUDIO] Opening playback...");
+  esp_err_t r = esp_codec_dev_open(playback, &fs);
+  if (r != ESP_OK) Serial.printf("[AUDIO] Playback open FAIL: 0x%x\n", r);
+  else Serial.println("[AUDIO] Playback open OK");
+  
+  if (capture) {
+    Serial.println("[AUDIO] Opening capture...");
+    r = esp_codec_dev_open(capture, &fs);
+    Serial.printf("[AUDIO] Capture open: %s (0x%x)\n", r == ESP_OK ? "OK" : "FAIL", r);
   }
 }
 
 // ── 鼓声合成 (vol_factor: 0.3~1.0 力度) ──────────
 #define DRUM_LEN 4096
 static int16_t drum_buf[DRUM_LEN * 2];  // stereo interleaved
+static const float DRUM_SR = 24000.0f;
 
 static void drum_kick(float vol) {
-  float amp = vol * 16000.0f;
+  float amp = vol * DRUM_SR;
   for (int i = 0; i < DRUM_LEN; i++) {
-    float t = (float)i / 16000.0f;
+    float t = (float)i / DRUM_SR;
     float env = expf(-12.0f * t);
     float s = env * sinf(2.0f * (float)M_PI * 80.0f * t);
     if (i < 80) s += (1.0f - i / 80.0f) * 0.5f * sinf(2.0f * (float)M_PI * 1000.0f * t);
@@ -304,7 +368,7 @@ static void drum_snare(float vol) {
   float amp = vol * 14000.0f;
   uint32_t seed = 42;
   for (int i = 0; i < DRUM_LEN; i++) {
-    float t = (float)i / 16000.0f;
+    float t = (float)i / DRUM_SR;
     float env = expf(-8.0f * t);
     seed = seed * 1103515245 + 12345;
     float noise = (float)(int16_t)(seed >> 16) / 32768.0f;
@@ -321,7 +385,7 @@ static void drum_hat(float vol) {
   float amp = vol * 10000.0f;
   uint32_t seed = 99;
   for (int i = 0; i < DRUM_LEN; i++) {
-    float t = (float)i / 16000.0f;
+    float t = (float)i / DRUM_SR;
     float env = expf(-25.0f * t);
     seed = seed * 1103515245 + 12345;
     float noise = (float)(int16_t)(seed >> 16) / 32768.0f;
@@ -336,7 +400,7 @@ static void drum_hat(float vol) {
 static void drum_tom(float vol) {
   float amp = vol * 13000.0f;
   for (int i = 0; i < DRUM_LEN; i++) {
-    float t = (float)i / 16000.0f;
+    float t = (float)i / DRUM_SR;
     float env = expf(-5.0f * t);
     float f = 200.0f * (1.0f - 0.3f * (1.0f - env));  // frequency glide
     float s = env * sinf(2.0f * (float)M_PI * f * t);
@@ -372,7 +436,7 @@ static void play_triangle_ding(float vol_factor) {
   // 力度映射到 0.3~1.0 的振幅因子
   float amp = 0.3f + vol_factor * 0.7f;
   for (int i = 0; i < len; i++) {
-    float t = (float)i / 16000.0f;
+    float t = (float)i / DRUM_SR;
     float env = expf(-80.0f * t);
     float s = amp * env * sinf(2.0f * M_PI * 2000.0f * t);
     int16_t v = (int16_t)(s * 12000.0f);
@@ -386,7 +450,7 @@ static void play_maraca_shake(float vol_factor) {
   int len = 640;
   float amp = 0.3f + vol_factor * 0.7f;
   for (int i = 0; i < len; i++) {
-    float t = (float)i / 16000.0f;
+    float t = (float)i / DRUM_SR;
     float env = expf(-60.0f * t);
     seed = seed * 1103515245 + 12345;
     float noise = (float)(int16_t)(seed >> 16) / 32768.0f;
@@ -395,6 +459,49 @@ static void play_maraca_shake(float vol_factor) {
     drum_buf[i*2] = v; drum_buf[i*2+1] = v;
   }
   if (playback) esp_codec_dev_write(playback, drum_buf, len * 4);
+}
+
+// ── 麦克风音量任务 ──────────────────────────
+static void mic_task(void *arg) {
+  Serial.println("[MIC] Task started");
+  int16_t samples[512 * 2];
+  uint32_t last_print = 0;
+  bool diag_done = false;
+  for (;;) {
+    uint32_t now = millis();
+    if (capture) {
+      // 首次诊断：读取 ES7210 寄存器确认芯片状态
+      if (!diag_done) {
+        diag_done = true;
+        int rv;
+        esp_codec_dev_read_reg(capture, 0x01, &rv);  // CLOCK_OFF_REG01
+        Serial.printf("[MIC_DIAG] CLOCK_OFF=0x%02X ", rv);
+        esp_codec_dev_read_reg(capture, 0x00, &rv);  // RESET_REG00
+        Serial.printf("RESET=0x%02X ", rv);
+        esp_codec_dev_read_reg(capture, 0x06, &rv);  // POWER_DOWN
+        Serial.printf("POWER=0x%02X\n", rv);
+      }
+      
+      int rd = esp_codec_dev_read(capture, samples, sizeof(samples));
+      if (rd > 0) {
+        int count = rd / 2;
+        double sum = 0.0;
+        for (int i = 0; i < count; i++) {
+          double s = (double)samples[i];
+          sum += s * s;
+        }
+        double rms = sqrt(sum / count);
+        double vol = (rms / 32768.0) * 100.0;
+        Serial.printf("!%d\n", (int)vol);
+      } else {
+        if (now - last_print > 1000) {
+          Serial.printf("!0\n");
+          last_print = now;
+        }
+      }
+    }
+    vTaskDelay(pdMS_TO_TICKS(50));
+  }
 }
 
 // ── 主程序 ────────────────────────────────────
@@ -416,6 +523,9 @@ void setup() {
 
   // 3. Audio codec (I2S + ES8311)
   audio_init();
+
+  // 3.5 Microphone capture
+  xTaskCreatePinnedToCore(mic_task, "mic", 4096, NULL, 1, NULL, 1);
 
   // 4. IMU sensor
   if (!qmi8658_begin()) {
@@ -448,7 +558,7 @@ void loop() {
       while (!Serial.available() && millis() < timeout) delay(1);
       if (Serial.available()) {
         char d = Serial.read();
-        if (d >= '0' && d <= '3') {
+        if (d >= '0' && d <= '4') {
           instrument_mode = d - '0';
           Serial.printf("[MODE] Set to %d\n", instrument_mode);
         }

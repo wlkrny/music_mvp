@@ -447,7 +447,7 @@
       <span class="vol-label" id="volLabel">80%</span>
     </div>
     <span class="rate" id="rateDisplay">-- Hz</span>
-    <button class="btn btn-record" id="recordBtn" onclick="toggleRecord()">⏺ Record</button>
+    <button class="btn btn-record" id="recordBtn" onclick="toggleRecord()"> Record</button>
     <span class="rec-indicator" id="recIndicator"><span class="rec-dot"></span><span id="recTime">0.0s</span> / <span id="recCount">0</span> samples</span>
     <span class="status-dot disconnected" id="statusDot"></span>
     <button class="btn btn-primary" id="connectBtn" onclick="toggleSerial()">Connect</button>
@@ -524,16 +524,16 @@
       <div class="panel-header">Drum Pad <span class="unit">click or press key</span></div>
       <div class="drum-grid">
         <button class="drum-btn kick" onmousedown="playDrum('kick')">
-          <span class="drum-emoji">🥁</span> Kick
+          <span class="drum-emoji"></span> Kick
         </button>
         <button class="drum-btn snare" onmousedown="playDrum('snare')">
-          <span class="drum-emoji">🔔</span> Snare
+          <span class="drum-emoji"></span> Snare
         </button>
         <button class="drum-btn hat" onmousedown="playDrum('hat')">
-          <span class="drum-emoji">💿</span> Hat
+          <span class="drum-emoji"></span> Hat
         </button>
         <button class="drum-btn tom" onmousedown="playDrum('tom')">
-          <span class="drum-emoji">🪘</span> Tom
+          <span class="drum-emoji"></span> Tom
         </button>
       </div>
       <div class="keyboard-hint">
@@ -545,12 +545,12 @@
       <div class="panel-header">Volume &amp; Test</div>
       <div class="audio-ctrl">
         <div class="vol-row">
-          <span style="font-size:18px;">🔈</span>
+          <span style="font-size:18px;"></span>
           <input type="range" id="volSlider2" min="0" max="100" value="80" oninput="setVolume2(this.value)" style="width:150px;accent-color:var(--accent);">
-          <span style="font-size:18px;">🔊</span>
+          <span style="font-size:18px;"></span>
           <span id="volLabel2" style="color:var(--accent);font-size:14px;font-weight:600;font-family:var(--mono);min-width:36px;">80%</span>
         </div>
-        <button onclick="sendTestTone()" class="btn btn-primary" style="padding:10px 24px;font-size:14px;">▶ 440Hz Test Tone</button>
+        <button onclick="sendTestTone()" class="btn btn-primary" style="padding:10px 24px;font-size:14px;"> 440Hz Test Tone</button>
         <span style="font-size:11px;color:var(--text-secondary);">发送测试音到 ESP32 喇叭</span>
       </div>
     </div>
@@ -569,31 +569,36 @@
       <div class="panel-header">Instrument Mode <span class="unit">
         <span class="playback-toggle" style="vertical-align:middle;margin-left:12px;">
           <input type="radio" name="playback" id="pbBoard" value="board" checked onchange="setPlaybackMode('board')">
-          <label for="pbBoard">🔊 开发板</label>
+          <label for="pbBoard"> 开发板</label>
           <input type="radio" name="playback" id="pbPC" value="pc" onchange="setPlaybackMode('pc')">
-          <label for="pbPC">🖥️ PC</label>
+          <label for="pbPC"> PC</label>
         </span>
       </span></div>
       <div class="mode-grid">
-        <button class="mode-btn active" data-mode="3" onclick="selectMode(3)">
-          <span class="mode-icon">⏹️</span>
-          <span class="mode-name">关闭</span>
-          <span class="mode-sub">Off</span>
+        <button class="mode-btn active" data-mode="4" onclick="selectMode(4)">
+          <span class="mode-icon">🔄</span>
+          <span class="mode-name">自动模式</span>
+          <span class="mode-sub">Auto Detect</span>
         </button>
         <button class="mode-btn" data-mode="0" onclick="selectMode(0)">
-          <span class="mode-icon">🥁</span>
+          <span class="mode-icon"></span>
           <span class="mode-name">鼓槌模式</span>
           <span class="mode-sub">Drumstick</span>
         </button>
         <button class="mode-btn" data-mode="1" onclick="selectMode(1)">
-          <span class="mode-icon">🔔</span>
+          <span class="mode-icon"></span>
           <span class="mode-name">三角铁模式</span>
           <span class="mode-sub">Triangle</span>
         </button>
         <button class="mode-btn" data-mode="2" onclick="selectMode(2)">
-          <span class="mode-icon">🪇</span>
+          <span class="mode-icon"></span>
           <span class="mode-name">沙槌模式</span>
           <span class="mode-sub">Maraca</span>
+        </button>
+        <button class="mode-btn" data-mode="3" onclick="selectMode(3)">
+          <span class="mode-icon"></span>
+          <span class="mode-name">关闭</span>
+          <span class="mode-sub">Off</span>
         </button>
       </div>
     </div>
@@ -866,7 +871,7 @@ function initAudio() {
 function setPlaybackMode(mode) {
   playbackMode = mode;
   if (mode === 'pc') initAudio();
-  instLog('播放: ' + (mode === 'pc' ? '🖥️ PC 喇叭' : '🔊 开发板'));
+  instLog('播放: ' + (mode === 'pc' ? ' PC 喇叭' : ' 开发板'));
 }
 
 // ── Web Audio 鼓合成 ──
@@ -1047,6 +1052,9 @@ document.addEventListener('keydown', e => {
 // ── PC 端手势检测状态 ──
 let pcCooldownEnd = 0, pcPeakMag = 0, pcPeakTime = 0;
 let pcSwinging = false, pcMustRest = false;
+// 自动模式: 重力估算 + 方向追踪
+let pcGx = 0, pcGy = 0, pcGz = 9.8, pcGCal = false;
+let pcVertSum = 0, pcHorizSum = 0, pcSwingSamples = 0;
 
 function pcDetectGesture(ax, ay, az) {
   if (currentMode === 3) return;
@@ -1054,8 +1062,17 @@ function pcDetectGesture(ax, ay, az) {
   initAudio();
   const mag = Math.sqrt(ax*ax + ay*ay + az*az);
 
+  // 重力方向估算
+  if (Math.abs(mag - 9.8) < 1.5) {
+    const alpha = 0.008;
+    pcGx = pcGx * (1 - alpha) + ax * alpha;
+    pcGy = pcGy * (1 - alpha) + ay * alpha;
+    pcGz = pcGz * (1 - alpha) + az * alpha;
+    if (!pcGCal && Math.abs(pcGz) > 1) pcGCal = true;
+  }
+
   if (currentMode === 0) {
-    // 鼓棒: 总幅值边沿检测 (不依赖板子方向)
+    // 鼓棒
     if (pcMustRest && now > pcCooldownEnd && mag > 10 && mag < 11) pcMustRest = false;
     if (!pcMustRest && mag > 15 && now > pcCooldownEnd) {
       pcSwinging = true; pcPeakMag = mag; pcPeakTime = now;
@@ -1065,12 +1082,42 @@ function pcDetectGesture(ax, ay, az) {
       if (mag < 13 || (now - pcPeakTime) > 500) {
         let vf = (pcPeakMag - 15) / 42; if (vf < 0.3) vf = 0.3; if (vf > 1) vf = 1;
         pcPlaySnare(vf);
-        pcCooldownEnd = now + 400;
-        pcSwinging = false; pcMustRest = true;
+        pcCooldownEnd = now + 400; pcSwinging = false; pcMustRest = true;
+      }
+    }
+  } else if (currentMode === 4 && pcGCal) {
+    // 自动模式: 竖挥→鼓棒, 横挥→沙锤
+    if (pcMustRest && now > pcCooldownEnd && mag > 10 && mag < 11) pcMustRest = false;
+    if (!pcSwinging) {
+      if (!pcMustRest && mag > 15 && now > pcCooldownEnd) {
+        pcSwinging = true; pcPeakMag = mag; pcPeakTime = now;
+        pcVertSum = 0; pcHorizSum = 0; pcSwingSamples = 0;
+      }
+    }
+    if (pcSwinging) {
+      if (mag > pcPeakMag) { pcPeakMag = mag; pcPeakTime = now; }
+      // 方向分析
+      let mx = ax - pcGx, my = ay - pcGy, mz = az - pcGz;
+      let gmag = Math.sqrt(pcGx*pcGx + pcGy*pcGy + pcGz*pcGz);
+      if (gmag > 0.1) {
+        let gux = pcGx / gmag, guy = pcGy / gmag, guz = pcGz / gmag;
+        let vp = mx*gux + my*guy + mz*guz;
+        let vert = Math.abs(vp);
+        let hx = mx - vp*gux, hy = my - vp*guy, hz = mz - vp*guz;
+        let horiz = Math.sqrt(hx*hx + hy*hy + hz*hz);
+        pcVertSum += vert; pcHorizSum += horiz; pcSwingSamples++;
+      }
+      if (mag < 13 || (now - pcPeakTime) > 500) {
+        let vf = (pcPeakMag - 15) / 42; if (vf < 0.3) vf = 0.3; if (vf > 1) vf = 1;
+        if (pcSwingSamples > 2) {
+          let ah = pcHorizSum / pcSwingSamples, av = pcVertSum / pcSwingSamples;
+          if (av > ah * 1.2) pcPlaySnare(vf); else pcPlayMaraca(vf);
+        } else pcPlaySnare(vf);
+        pcCooldownEnd = now + 400; pcSwinging = false; pcMustRest = true;
       }
     }
   } else {
-    // 三角铁/沙锤: 总幅值
+    // 三角铁/沙锤
     if (!pcSwinging) {
       if (mag > 12 && now > pcCooldownEnd) { pcSwinging = true; pcPeakMag = mag; }
     } else {
@@ -1078,22 +1125,21 @@ function pcDetectGesture(ax, ay, az) {
       if (mag < 11) {
         let vf = (pcPeakMag - 12) / 18; if (vf < 0.3) vf = 0.3; if (vf > 1) vf = 1;
         if (currentMode === 1) pcPlayTriangle(vf); else pcPlayMaraca(vf);
-        pcCooldownEnd = now + 150;
-        pcSwinging = false;
+        pcCooldownEnd = now + 150; pcSwinging = false;
       }
     }
   }
 }
 
 /* ──────────────── Instrument Mode ──────────────── */
-let currentMode = 3;
+let currentMode = 4;
 
 function selectMode(mode) {
   currentMode = mode;
   document.querySelectorAll('.mode-btn').forEach(b => {
     b.classList.toggle('active', parseInt(b.dataset.mode) === mode);
   });
-  const names = ['🥁 Drumstick', '🔔 Triangle', '🪇 Maraca', '⏹️ Off'];
+  const names = [' Drumstick', ' Triangle', ' Maraca', ' Off', ' Auto'];
   if (mode === 3) { pcSwinging = false; pcMustRest = false; }
   if (playbackMode === 'pc') {
     instLog('Mode (PC): ' + names[mode]);
@@ -1155,7 +1201,7 @@ function toggleRecord() {
   const ind = document.getElementById('recIndicator');
   if (recBuffer) {
     // STOP recording
-    btn.textContent = '⏺ Record';
+    btn.textContent = ' Record';
     btn.classList.remove('recording');
     ind.classList.remove('active');
     if (recTimerId) { clearInterval(recTimerId); recTimerId = null; }
@@ -1165,7 +1211,7 @@ function toggleRecord() {
     // START recording
     recBuffer = [];
     recStartTime = performance.now();
-    btn.textContent = '⏹ Stop';
+    btn.textContent = ' Stop';
     btn.classList.add('recording');
     ind.classList.add('active');
     document.getElementById('recCount').textContent = '0';
