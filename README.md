@@ -1,127 +1,127 @@
 # music_mvp
 
-> ESP32-S3 体感音乐交互原型 - IMU 手势触发 + 软件鼓合成 + I2S 音频输出
+> ESP32-S3 Motion-Controlled Music Interaction Prototype - IMU Gesture Triggers + Software Drum Synthesis + I2S Audio Output
 
-通过摇晃、敲击开发板触发不同的乐器音效，合成音频通过 ES8311 编解码器经 I2S 输出到扬声器。配套 Web 仪表盘实现 IMU 实时可视化和音频调试。
-
----
-
-## 功能特性
-
-| 功能 | 说明 |
-|------|------|
-| **IMU 实时数据流** | QMI8658 6 轴传感器, 50Hz CSV 输出到串口 |
-| **体感乐器** | 4 种演奏模式：鼓槌 / 三角铁 / 沙槌 / 关闭, 力度感应 |
-| **软件鼓合成** | Kick / Snare / Hat / Tom 四通道, 正弦+噪声合成 |
-| **I2S 音频输出** | ES8311 DAC 编解码器, 16kHz 立体声, TCA9554 PA 控制 |
-| **Web 仪表盘** | Chart.js 实时波形, 3D 姿态立方体, 打击垫, 模式切换 |
-| **Web Serial 通信** | 浏览器 USB 串口直连, 无需安装 App |
-| **ESP-IDF 组件** | 集成 codec_board + esp_codec_dev 官方音频框架 |
+Trigger different instrument sounds by shaking or tapping the dev board. Synthesized audio is output to a speaker via the ES8311 codec over I2S. A companion Web Dashboard provides real-time IMU visualization and audio debugging.
 
 ---
 
-## 硬件规格
+## Features
 
-| 组件 | 参数 |
-|------|------|
-| **主控** | ESP32-S3 |
-| **屏幕** | Waveshare Touch-LCD-3.49 V2, 172x640, AXS15231B (当前固件未启用显示) |
-| **音频 DAC** | ES8311 @ I2C 0x18, I2S 输出 (MCLK=7, BCLK=15, WS=46, DOUT=45) |
-| **音频 ADC** | ES7210 @ I2C 0x40, I2S 输入 (DIN=6), 预留麦克风 |
-| **PA 功放** | TCA9554 @ I2C 0x20, bit7 控制 |
-| **IMU** | QMI8658 @ I2C 0x6B, 6 轴 (加速度计 ±8G + 陀螺仪 ±512dps) |
-| **I2C 总线** | SDA=GPIO47, SCL=GPIO48 (共享 ES8311/ES7210/QMI8658/TCA9554) |
-| **QSPI 显示** | CS=GPIO9, PCLK=GPIO10, DATA0-3=GPIO11-14 (预留, 当前未初始化) |
+| Feature | Description |
+|---------|-------------|
+| **IMU Real-Time Data Stream** | QMI8658 6-axis sensor, 50Hz CSV output over serial |
+| **Motion-Controlled Instruments** | 4 playback modes: Drumstick / Triangle / Maraca / Off, with velocity sensitivity |
+| **Software Drum Synthesis** | Kick / Snare / Hat / Tom four-channel, sine + noise synthesis |
+| **I2S Audio Output** | ES8311 DAC codec, 16kHz stereo, TCA9554 PA control |
+| **Web Dashboard** | Chart.js real-time waveforms, 3D attitude cube, drum pads, mode switching |
+| **Web Serial Communication** | Browser USB serial direct connection, no app installation required |
+| **ESP-IDF Components** | Integrated codec_board + esp_codec_dev official audio framework |
 
 ---
 
-## 项目结构
+## Hardware Specifications
+
+| Component | Details |
+|-----------|---------|
+| **MCU** | ESP32-S3 |
+| **Display** | Waveshare Touch-LCD-3.49 V2, 172x640, AXS15231B (display currently disabled in firmware) |
+| **Audio DAC** | ES8311 @ I2C 0x18, I2S output (MCLK=7, BCLK=15, WS=46, DOUT=45) |
+| **Audio ADC** | ES7210 @ I2C 0x40, I2S input (DIN=6), reserved for microphone |
+| **PA Amplifier** | TCA9554 @ I2C 0x20, bit7 control |
+| **IMU** | QMI8658 @ I2C 0x6B, 6-axis (accelerometer ±8G + gyroscope ±512dps) |
+| **I2C Bus** | SDA=GPIO47, SCL=GPIO48 (shared by ES8311/ES7210/QMI8658/TCA9554) |
+| **QSPI Display** | CS=GPIO9, PCLK=GPIO10, DATA0-3=GPIO11-14 (reserved, not initialized) |
+
+---
+
+## Project Structure
 
 ```
 music_mvp/
-├── music_mvp.ino              # 主固件 (Arduino/PlatformIO)
-├── user_config.h              # 引脚、I2C 地址、显示参数配置
-├── imu_monitor.html           # Web 仪表盘
+├── music_mvp.ino              # Main firmware (Arduino/PlatformIO)
+├── user_config.h              # Pin, I2C address, and display parameter configuration
+├── imu_monitor.html           # Web Dashboard
 ├── README.md
 │
 ├── src/
-│   ├── codec_board/           # ESP-IDF 音频板级支持包
-│   │   ├── codec_board.h/c    # 板级抽象 (I2C/I2S/Codec/LCD 配置)
-│   │   ├── codec_init.h/c     # 编解码器初始化
-│   │   ├── board_cfg.h/txt    # 板级引脚配置描述
-│   │   ├── cfg_parse.c        # 配置解析器
-│   │   ├── drv/tca9554.c/h    # TCA9554 GPIO 扩展驱动
-│   │   ├── lcd_init.c         # LCD 初始化 (预留)
-│   │   └── dummy_codec.c/h    # 哑编解码器 (纯 I2S)
+│   ├── codec_board/           # ESP-IDF audio board support package
+│   │   ├── codec_board.h/c    # Board abstraction (I2C/I2S/Codec/LCD config)
+│   │   ├── codec_init.h/c     # Codec initialization
+│   │   ├── board_cfg.h/txt    # Board pin configuration descriptor
+│   │   ├── cfg_parse.c        # Configuration parser
+│   │   ├── drv/tca9554.c/h    # TCA9554 GPIO expander driver
+│   │   ├── lcd_init.c         # LCD initialization (reserved)
+│   │   └── dummy_codec.c/h    # Dummy codec (pure I2S)
 │   │
-│   └── esp_codec_dev/         # ESP-IDF 音频编解码器设备框架
-│       ├── esp_codec_dev.c    # 设备管理核心
-│       ├── esp_codec_dev_vol.c # 软件音量控制
-│       ├── device/es8311/     # ES8311 DAC 驱动
-│       ├── device/es7210/     # ES7210 ADC 驱动
-│       ├── platform/          # I2C/SPI/I2S/GPIO 平台抽象
-│       └── interface/         # 编解码器接口定义
+│   └── esp_codec_dev/         # ESP-IDF audio codec device framework
+│       ├── esp_codec_dev.c    # Device management core
+│       ├── esp_codec_dev_vol.c # Software volume control
+│       ├── device/es8311/     # ES8311 DAC driver
+│       ├── device/es7210/     # ES7210 ADC driver
+│       ├── platform/          # I2C/SPI/I2S/GPIO platform abstraction
+│       └── interface/         # Codec interface definitions
 │
-└── build/                     # 编译产物 (.gitignore 已排除)
+└── build/                     # Build artifacts (excluded by .gitignore)
 ```
 
 ---
 
-## 串口通信协议
+## Serial Communication Protocol
 
-Web 仪表盘与 ESP32 之间通过 **115200bps** 串口通信。
+The Web Dashboard communicates with the ESP32 over serial at **115200bps**.
 
-### 上行 (PC -> ESP32)
+### Upstream (PC -> ESP32)
 
-| 命令 | 说明 |
-|------|------|
-| `K` / `S` / `H` / `T` | 触发 Kick / Snare / Hat / Tom 鼓声 |
-| `M0` ~ `M3` | 切换乐器模式 (0=鼓槌, 1=三角铁, 2=沙槌, 3=关闭) |
-| `V0` ~ `V100` | 设置音量百分比 |
+| Command | Description |
+|---------|-------------|
+| `K` / `S` / `H` / `T` | Trigger Kick / Snare / Hat / Tom drum sounds |
+| `M0` ~ `M3` | Switch instrument mode (0=Drumstick, 1=Triangle, 2=Maraca, 3=Off) |
+| `V0` ~ `V100` | Set volume percentage |
 
-### 下行 (ESP32 -> PC)
+### Downstream (ESP32 -> PC)
 
 ```
 ax,ay,az,gx,gy,gz
 ```
-6 个浮点数值的 CSV 格式，50Hz 输出：
-- `ax,ay,az` - 加速度计 X/Y/Z (单位 m/s^2, ±8G 量程)
-- `gx,gy,gz` - 陀螺仪 X/Y/Z (单位 deg/s, ±512dps 量程)
+CSV format with 6 floating-point values, output at 50Hz:
+- `ax,ay,az` - Accelerometer X/Y/Z (unit: m/s², ±8G range)
+- `gx,gy,gz` - Gyroscope X/Y/Z (unit: deg/s, ±512dps range)
 
 ---
 
-## 乐器模式说明
+## Instrument Mode Descriptions
 
-固件通过检测 IMU 加速度幅值的边沿变化来触发音效：
+The firmware detects edge changes in IMU acceleration magnitude to trigger sounds:
 
-| 模式 | 命令 | 触发阈值 | 冷却 | 音效 |
-|------|------|---------|------|------|
-| 鼓槌 | `M0` | >15 m/s^2 | 250ms | 力度控制随机鼓声 (K/S/H/T) |
-| 三角铁 | `M1` | >12 m/s^2 | 150ms | 2000Hz Ding 衰减音 |
-| 沙槌 | `M2` | >12 m/s^2 | 150ms | 白噪声 Shake 衰减音 |
-| 关闭 | `M3` | - | - | 仅输出 IMU 数据 |
+| Mode | Command | Trigger Threshold | Cooldown | Sound |
+|------|---------|-------------------|----------|-------|
+| Drumstick | `M0` | >15 m/s² | 250ms | Velocity-controlled random drums (K/S/H/T) |
+| Triangle | `M1` | >12 m/s² | 150ms | 2000Hz Ding decay tone |
+| Maraca | `M2` | >12 m/s² | 150ms | White noise Shake decay tone |
+| Off | `M3` | - | - | IMU data output only |
 
-力度感应：峰值加速度映射到音量因子 0.3~1.0，控制合成振幅。
+Velocity sensitivity: peak acceleration maps to a volume factor of 0.3~1.0, controlling synthesis amplitude.
 
 ---
 
-## 快速开始
+## Quick Start
 
-### 1. 环境准备
+### 1. Environment Setup
 
-- **Arduino IDE** 或 **PlatformIO**，安装 ESP32-S3 (esp32 >= 3.0) 开发板支持
-- 安装 ESP-IDF 音频组件 (codec_board, esp_codec_dev 已包含在 `src/` 中)
+- **Arduino IDE** or **PlatformIO**, with ESP32-S3 board support installed (esp32 >= 3.0)
+- Install ESP-IDF audio components (codec_board, esp_codec_dev already included in `src/`)
 
-### 2. 编译与烧录
+### 2. Build & Flash
 
 ```bash
 # PlatformIO
 pio run --target upload
 
-# 或 Arduino IDE 中打开 music_mvp.ino 编译上传
+# Or open music_mvp.ino in Arduino IDE and compile/upload
 ```
 
-串口监视器 (115200bps) 将显示初始化日志：
+Serial monitor (115200bps) will display initialization logs:
 ```
 ╔═══════════════════════════════════════╗
 ║  music_mvp v1.0                      ║
@@ -136,32 +136,32 @@ pio run --target upload
 [MAIN] === READY ===
 ```
 
-### 3. 打开 Web 仪表盘
+### 3. Open Web Dashboard
 
-1. 用 Chrome/Edge 浏览器打开 `imu_monitor.html`
-2. 点击 **Connect** 按钮，选择 ESP32-S3 串口设备
-3. 连接后可查看实时 IMU 波形、切换乐器模式、触发鼓声
-
----
-
-## 音频合成算法
-
-软件合成全部在 ESP32-S3 上实时计算，无需外部音频文件：
-
-| 音色 | 合成方法 | 参数 |
-|------|---------|------|
-| **Kick** | 80Hz 正弦 + 1kHz 短脉冲起音, 指数衰减 (exp(-12t)) | 4096 采样 |
-| **Snare** | 180Hz 正弦 + 白噪声混合 (70/30), 指数衰减 (exp(-8t)) | 4096 采样 |
-| **Hat** | 纯白噪声, 快速指数衰减 (exp(-25t)) | 4096 采样 |
-| **Tom** | 200Hz 正弦 + 频率滑降 (0.7x), 指数衰减 (exp(-5t)) | 4096 采样 |
-| **Triangle** | 2000Hz 正弦, 衰减 (exp(-80t)) | 800 采样 (~50ms) |
-| **Maraca** | 白噪声, 衰减 (exp(-60t)) | 640 采样 (~40ms) |
-
-输出格式: 16kHz, 16bit, 立体声交错 (I2S standard 格式)。
+1. Open `imu_monitor.html` in Chrome/Edge browser
+2. Click the **Connect** button and select the ESP32-S3 serial device
+3. Once connected, view real-time IMU waveforms, switch instrument modes, and trigger drum sounds
 
 ---
 
-## 架构设计
+## Audio Synthesis Algorithms
+
+All software synthesis runs in real-time on the ESP32-S3. No external audio files required:
+
+| Sound | Synthesis Method | Parameters |
+|-------|-----------------|------------|
+| **Kick** | 80Hz sine + 1kHz short attack pulse, exponential decay (exp(-12t)) | 4096 samples |
+| **Snare** | 180Hz sine + white noise blend (70/30), exponential decay (exp(-8t)) | 4096 samples |
+| **Hat** | Pure white noise, fast exponential decay (exp(-25t)) | 4096 samples |
+| **Tom** | 200Hz sine + frequency sweep down (0.7x), exponential decay (exp(-5t)) | 4096 samples |
+| **Triangle** | 2000Hz sine, decay (exp(-80t)) | 800 samples (~50ms) |
+| **Maraca** | White noise, decay (exp(-60t)) | 640 samples (~40ms) |
+
+Output format: 16kHz, 16bit, stereo interleaved (I2S standard format).
+
+---
+
+## Architecture Design
 
 ```
                         Serial (115200)
@@ -202,26 +202,26 @@ pio run --target upload
    Speaker  Codec                                 
 ```
 
-- **IMU 任务**运行在 FreeRTOS Core 1，50Hz 定时采样并输出 CSV
-- **loop()** 运行在 Core 0，处理串口命令解析
-- **音频合成**在 IMU 任务中直接写入 I2S 缓冲区，无需额外任务
-- **手势检测**使用边沿检测状态机：空闲 -> 挥动峰值追踪 -> 触发 -> 冷却
+- **IMU Task** runs on FreeRTOS Core 1, sampling at 50Hz and outputting CSV
+- **loop()** runs on Core 0, handling serial command parsing
+- **Audio Synthesis** writes directly to the I2S buffer within the IMU task, no extra task needed
+- **Gesture Detection** uses an edge-detection state machine: Idle -> Swing Peak Tracking -> Trigger -> Cooldown
 
 ---
 
-## 许可证
+## License
 
 - `src/codec_board/` - ESPRESSIF MIT License
 - `src/esp_codec_dev/` - Apache-2.0, Copyright Espressif Systems
-- 自定义代码 (`music_mvp.ino`, `imu_monitor.html`, `user_config.h`) - 自定
+- Custom code (`music_mvp.ino`, `imu_monitor.html`, `user_config.h`) - Custom
 
 ---
 
-## 注意事项
+## Notes
 
-1. TCA9554 地址为 `0x20`, bit5=LCD复位(释放=1), bit7=PA功放使能
-2. 当前固件**未启用 LVGL 显示**, QSPI 屏幕未初始化, 以节省内存和 CPU
-3. ES8311 编解码器需要 MCLK 主时钟 (GPIO7)
-4. IMU 数据通过 Web Serial API 读取，仅支持 Chrome/Edge 等 Chromium 内核浏览器
-5. I2C 总线速度: ES8311/ES7210/TCA9554 = 100kHz, QMI8658 = 400kHz
-6. 音频输出 16kHz 采样率, 如需更高音质可调整 `esp_codec_dev_sample_info_t`
+1. TCA9554 address is `0x20`, bit5=LCD reset (release=1), bit7=PA amplifier enable
+2. Current firmware does **not enable LVGL display**; QSPI screen is uninitialized to save memory and CPU
+3. ES8311 codec requires MCLK master clock (GPIO7)
+4. IMU data is read via the Web Serial API, supported only by Chromium-based browsers (Chrome/Edge)
+5. I2C bus speeds: ES8311/ES7210/TCA9554 = 100kHz, QMI8658 = 400kHz
+6. Audio output at 16kHz sample rate; adjust `esp_codec_dev_sample_info_t` if higher quality is needed
